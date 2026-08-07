@@ -432,18 +432,6 @@ function myEntry(){ return session.players.find(p => p.deviceToken === deviceTok
 function renderVote(){
   const el = document.getElementById("tab-vote");
 
-  if(isRevealed(session)){
-    const existing = myEntry();
-    el.innerHTML = `
-      <div class="card">
-        <h2>Voting is closed</h2>
-        <p class="sub">Rosters have been revealed for this session, so votes are locked to keep teams from shifting after everyone's seen them.</p>
-        ${existing ? `<p class="hint">You voted as <strong>${escapeHtml(existing.name)}</strong>. Check the "My Status" tab to see the final teams.</p>` : `<p class="hint">You didn't get a vote in before reveal — catch the next session.</p>`}
-      </div>
-    `;
-    return;
-  }
-
   const existing = myEntry();
   if(existing){ draftPosition = existing.position; draftRating = existing.rating; }
   el.innerHTML = `
@@ -509,7 +497,6 @@ async function onSubmitVote(){
   const injured = document.getElementById("f-injured").checked;
 
   session = await loadSession();
-  if(isRevealed(session)){ renderVote(); return; } // reveal happened while this form was open
 
   let entry = session.players.find(p=>p.deviceToken===deviceToken);
   if(!entry){
@@ -532,7 +519,6 @@ async function onSubmitVote(){
 
 async function onWithdrawVote(){
   session = await loadSession();
-  if(isRevealed(session)){ renderVote(); return; }
   session.players = session.players.filter(p=>p.deviceToken!==deviceToken);
   recompute(session);
   await saveSession(session);
