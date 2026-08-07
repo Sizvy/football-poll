@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Matchday — Team Sheet</title>
+<style>
+  :root{
+    --pitch-dark:#0f2a1c;
+    --pitch:#1f5d3a;
+    --pitch-line:rgba(245,241,230,0.35);
+    --chalk:#f5f1e6;
+    --chalk-2:#ece5d3;
+    --ink:#16201a;
+    --ink-soft:#4b5a4f;
+    --amber:#e3a72b;
+    --red:#c1432d;
+    --team-a:#2b4c7e;
+    --team-b:#c9861f;
+    --radius:14px;
+    --display: 'Arial Narrow', 'Helvetica Neue Condensed', 'Oswald', Impact, sans-serif;
+    --body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:var(--body);
+    background:var(--pitch-dark);
+    color:var(--ink);
+    min-height:100vh;
+  }
+  .field-bg{
+    position:fixed; inset:0; z-index:-1;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0 40px, rgba(0,0,0,0.03) 40px 80px),
+      radial-gradient(ellipse at 50% -10%, #2a6b43 0%, var(--pitch-dark) 70%);
+  }
+  header{
+    padding:28px 20px 18px;
+    text-align:center;
+    color:var(--chalk);
+  }
+  header .eyebrow{
+    font-family:var(--display);
+    letter-spacing:0.25em;
+    font-size:12px;
+    color:var(--amber);
+    text-transform:uppercase;
+    margin-bottom:4px;
+  }
+  header h1{
+    font-family:var(--display);
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:0.03em;
+    font-size:clamp(28px,6vw,42px);
+    margin:0 0 4px;
+  }
+  header p{
+    margin:0; color:rgba(245,241,230,0.7); font-size:14px;
+  }
+  .tabs{
+    display:flex; justify-content:center; gap:6px;
+    padding:0 16px 20px; flex-wrap:wrap;
+  }
+  .tab{
+    font-family:var(--display); text-transform:uppercase; letter-spacing:0.08em;
+    font-size:13px; font-weight:700;
+    background:rgba(245,241,230,0.08);
+    color:var(--chalk);
+    border:1px solid rgba(245,241,230,0.25);
+    padding:9px 18px; border-radius:999px; cursor:pointer;
+    transition:all .15s ease;
+  }
+  .tab:hover{ background:rgba(245,241,230,0.16); }
+  .tab.active{ background:var(--amber); color:var(--pitch-dark); border-color:var(--amber); }
+
+  main{ max-width:640px; margin:0 auto; padding:0 16px 60px; }
+  .card{
+    background:var(--chalk);
+    border-radius:var(--radius);
+    padding:22px;
+    box-shadow:0 12px 30px rgba(0,0,0,0.25);
+    margin-bottom:18px;
+  }
+  .card h2{
+    font-family:var(--display); text-transform:uppercase; letter-spacing:0.04em;
+    font-size:20px; margin:0 0 4px; color:var(--ink);
+  }
+  .card .sub{ font-size:13px; color:var(--ink-soft); margin:0 0 18px; }
+
+  label{ display:block; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-soft); margin:14px 0 6px; }
+  label:first-of-type{ margin-top:0; }
+  input[type=text], textarea, select{
+    width:100%; padding:11px 12px; border-radius:8px; border:1px solid #d8d0bb;
+    background:#fff; font-family:var(--body); font-size:15px; color:var(--ink);
+  }
+  textarea{ resize:vertical; min-height:60px; }
+  .pos-picker{ display:flex; gap:8px; }
+  .pos-btn{
+    flex:1; padding:12px 6px; text-align:center; border-radius:8px; border:2px solid #d8d0bb;
+    background:#fff; cursor:pointer; font-family:var(--display); text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:14px;
+    transition:all .15s ease;
+  }
+  .pos-btn.active{ border-color:var(--pitch); background:var(--pitch); color:#fff; }
+
+  .rating-row{ display:flex; align-items:center; gap:12px; }
+  input[type=range]{ flex:1; accent-color:var(--pitch); }
+  .rating-badge{
+    font-family:var(--display); font-weight:800; font-size:20px; color:var(--pitch);
+    background:var(--chalk-2); border-radius:8px; padding:6px 12px; min-width:44px; text-align:center;
+  }
+
+  .checkbox-row{ display:flex; align-items:center; gap:10px; margin-top:14px; }
+  .checkbox-row input{ width:18px; height:18px; accent-color:var(--red); }
+  .checkbox-row span{ font-size:14px; color:var(--ink); }
+
+  .btn{
+    font-family:var(--display); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;
+    border:none; border-radius:8px; padding:13px 20px; font-size:14px; cursor:pointer;
+    width:100%; margin-top:20px; transition:transform .1s ease, opacity .15s ease;
+  }
+  .btn:active{ transform:scale(0.98); }
+  .btn-primary{ background:var(--pitch); color:#fff; }
+  .btn-danger{ background:var(--red); color:#fff; }
+  .btn-outline{ background:transparent; border:1.5px solid var(--ink-soft); color:var(--ink); }
+  .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+
+  .msg{ font-size:13px; padding:10px 12px; border-radius:8px; margin-top:12px; }
+  .msg-ok{ background:#e2f0e5; color:#1f5d3a; }
+  .msg-err{ background:#fbe4de; color:var(--red); }
+
+  .ticket{
+    background:linear-gradient(135deg,var(--pitch) 0%,var(--pitch-dark) 100%);
+    color:var(--chalk); border-radius:var(--radius); padding:26px; text-align:center;
+    position:relative; overflow:hidden;
+  }
+  .ticket .lock{ font-size:34px; margin-bottom:6px; }
+  .ticket .team-stamp{
+    font-family:var(--display); font-weight:800; font-size:38px; letter-spacing:0.05em;
+    text-transform:uppercase; margin:6px 0;
+  }
+  .ticket .team-stamp.a{ color:#8fb3ff; }
+  .ticket .team-stamp.b{ color:var(--amber); }
+  .ticket .note{ font-size:13px; color:rgba(245,241,230,0.75); }
+  .countdown{ font-family:var(--display); font-size:15px; letter-spacing:0.05em; margin-top:10px; color:var(--amber); }
+
+  .pitch-wrap{ display:flex; flex-direction:column; gap:16px; }
+  .mini-pitch{
+    background:var(--pitch); border-radius:12px; padding:14px; position:relative;
+    border:2px solid var(--pitch-line);
+  }
+  .mini-pitch::before{
+    content:''; position:absolute; left:50%; top:8px; bottom:8px; width:1px; background:var(--pitch-line); transform:translateX(-50%);
+  }
+  .mini-pitch h3{
+    font-family:var(--display); text-transform:uppercase; color:var(--chalk); margin:0 0 10px; font-size:15px; letter-spacing:0.06em;
+  }
+  .mini-pitch h3 .avg{ color:var(--amber); font-size:12px; margin-left:8px; }
+  .line{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-bottom:10px; }
+  .line-label{ text-align:center; font-size:10px; letter-spacing:0.1em; color:rgba(245,241,230,0.55); text-transform:uppercase; margin-bottom:4px; }
+  .chip{
+    background:rgba(245,241,230,0.95); color:var(--ink); border-radius:999px; padding:6px 12px;
+    font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px;
+  }
+  .chip .r{ font-family:var(--display); font-weight:800; color:var(--pitch); }
+  .chip .inj{ color:var(--red); }
+  .chip .shifted{ font-size:10px; color:var(--ink-soft); font-style:italic; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ padding:8px 6px; border-bottom:1px solid var(--chalk-2); text-align:left; vertical-align:middle; }
+  th{ font-family:var(--display); text-transform:uppercase; letter-spacing:0.04em; font-size:11px; color:var(--ink-soft); }
+  td input, td select{ padding:6px 8px; font-size:13px; }
+  .row-actions{ display:flex; gap:6px; }
+  .icon-btn{ border:none; background:var(--chalk-2); border-radius:6px; padding:6px 9px; cursor:pointer; font-size:13px; }
+  .icon-btn.danger{ background:#fbe4de; color:var(--red); }
+  .team-tag{ font-family:var(--display); font-weight:800; font-size:12px; padding:2px 8px; border-radius:6px; color:#fff; }
+  .team-tag.a{ background:var(--team-a); }
+  .team-tag.b{ background:var(--team-b); }
+
+  .locked-gate{ text-align:center; padding:20px 0; }
+  .locked-gate input{ text-align:center; letter-spacing:0.2em; font-family:var(--display); font-size:18px; }
+
+  footer{ text-align:center; color:rgba(245,241,230,0.4); font-size:12px; padding:20px; }
+  .hint{ font-size:12px; color:var(--ink-soft); margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="field-bg"></div>
+<header>
+  <div class="eyebrow">Pickup football · squad builder</div>
+  <h1>Matchday Sheet</h1>
+  <p id="headerSub">Vote in, get placed. No line-ups shown before kickoff prep.</p>
+</header>
+
+<div class="tabs">
+  <button class="tab active" data-tab="vote">Vote</button>
+  <button class="tab" data-tab="status">My Status</button>
+  <button class="tab" data-tab="admin">Admin</button>
+</div>
+
+<main>
+  <div id="tab-vote"></div>
+  <div id="tab-status" style="display:none"></div>
+  <div id="tab-admin" style="display:none"></div>
+</main>
+
+<footer>Rosters recomputed live · hidden until the coordinator reveals them</footer>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
+import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
+
+/* ============ CONFIG ============ */
+// Passcode is stored as a SHA-256 hash, not plaintext, so it isn't trivially
+// readable via "view source". Current passcode is "changeme123" — ask Claude
+// to generate a new hash for you if you want to change it.
+const ADMIN_PASSCODE_HASH = "494a715f7e9b4071aca61bac42ca858a309524e5864f0920030862a4ae7589be";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAoEHD9YqlB_zVgpYLz1OsncCDIYm50Wz4",
+  authDomain: "football-poll-ed010.firebaseapp.com",
+  databaseURL: "https://football-poll-ed010-default-rtdb.firebaseio.com",
+  projectId: "football-poll-ed010",
+  storageBucket: "football-poll-ed010.firebasestorage.app",
+  messagingSenderId: "739088818706",
+  appId: "1:739088818706:web:190be214acb90d7b7f6ecb"
+};
+const fbApp = initializeApp(firebaseConfig);
+const db = getDatabase(fbApp);
+const sessionRef = ref(db, "sessions/current");
+
+async function sha256Hex(str){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+/* ============ STATE ============ */
+let session = emptySession(); // {createdAt, cutoffISO, revealNow, players:[...]}
+let deviceToken = getDeviceToken();
+let adminUnlocked = false;
+let activeTab = "vote";
+let draftPosition = "M";
+let draftRating = 6;
+
+function getDeviceToken(){
+  let t = localStorage.getItem("ff_device_token");
+  if(!t){ t = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("ff_device_token", t); }
+  return t;
+}
+function uid(){ return "p_" + Math.random().toString(36).slice(2,9); }
+
+function emptySession(){
+  return { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false, players: [] };
+}
+
+// Firebase RTDB silently omits empty arrays/objects and null fields when saving.
+// Any read has to re-hydrate those back to safe defaults, or code that assumes
+// session.players is always an array (e.g. .find, .push) will crash.
+function normalizeSession(raw){
+  if(!raw) return emptySession();
+  return {
+    createdAt: raw.createdAt || new Date().toISOString(),
+    cutoffISO: raw.cutoffISO || null,
+    revealNow: !!raw.revealNow,
+    players: Array.isArray(raw.players) ? raw.players : []
+  };
+}
+
+/* ============ STORAGE I/O (Firebase Realtime Database) ============ */
+async function loadSession(){
+  try{
+    const snap = await get(sessionRef);
+    return normalizeSession(snap.exists() ? snap.val() : null);
+  }catch(e){
+    console.error("Load failed", e);
+    return emptySession();
+  }
+}
+async function saveSession(s){
+  try{
+    await set(sessionRef, s);
+  }catch(e){
+    console.error("Save failed", e);
+    showMsg("vote", "Could not save — check your connection and try again.", true);
+  }
+}
+
+/* ============ BALANCING ALGORITHM ============ */
+const POS_ORDER = ["D","M","A"];
+
+function cloneState(s){ return JSON.parse(JSON.stringify(s)); }
+
+function computeTeams(players){
+  const eligible = players.filter(p => !p.sitOut);
+  const overridden = eligible.filter(p => p.teamOverride);
+  const rest = eligible.filter(p => !p.teamOverride)
+    .slice()
+    .sort((a,b) => b.rating - a.rating || a.id.localeCompare(b.id));
+
+  const state = {
+    A:{count:0, rating:0, pos:{D:0,M:0,A:0}},
+    B:{count:0, rating:0, pos:{D:0,M:0,A:0}}
+  };
+  const assign = {};
+
+  overridden.forEach(p=>{
+    assign[p.id] = p.teamOverride;
+    const s = state[p.teamOverride];
+    s.count++; s.rating += p.rating; s.pos[p.position]++;
+  });
+
+  function imbalance(sA, sB){
+    return Math.abs(sA.count - sB.count)*1000
+      + (Math.abs(sA.pos.D-sB.pos.D)+Math.abs(sA.pos.M-sB.pos.M)+Math.abs(sA.pos.A-sB.pos.A))*20
+      + Math.abs(sA.rating - sB.rating);
+  }
+
+  rest.forEach(p=>{
+    const A2 = cloneState(state.A); A2.count++; A2.rating+=p.rating; A2.pos[p.position]++;
+    const B2 = cloneState(state.B); B2.count++; B2.rating+=p.rating; B2.pos[p.position]++;
+    const scoreA = imbalance(A2, state.B);
+    const scoreB = imbalance(state.A, B2);
+    const team = scoreA <= scoreB ? "A" : "B";
+    assign[p.id] = team;
+    const s = state[team];
+    s.count++; s.rating += p.rating; s.pos[p.position]++;
+  });
+
+  function applyMove(p, from, to){
+    state[from].count--; state[from].rating -= p.rating; state[from].pos[p.position]--;
+    state[to].count++; state[to].rating += p.rating; state[to].pos[p.position]++;
+    assign[p.id] = to;
+  }
+  function swapPlayers(p1, p2){
+    const t1 = assign[p1.id], t2 = assign[p2.id];
+    applyMove(p1, t1, t2);
+    applyMove(p2, t2, t1);
+  }
+  function totalImbalance(){ return imbalance(state.A, state.B); }
+
+  // local swap-improvement pass (bounded)
+  let improved = true, iter = 0;
+  const movable = eligible.filter(p=>!p.teamOverride);
+  while(improved && iter < 200){
+    improved = false; iter++;
+    for(const p1 of movable){
+      for(const p2 of movable){
+        if(p1.id===p2.id) continue;
+        if(assign[p1.id] === assign[p2.id]) continue;
+        const before = totalImbalance();
+        swapPlayers(p1,p2);
+        const after = totalImbalance();
+        if(after < before){ improved = true; }
+        else{ swapPlayers(p1,p2); }
+      }
+    }
+  }
+
+  eligible.forEach(p => p.team = assign[p.id]);
+  players.filter(p=>p.sitOut).forEach(p => p.team = null);
+  return players;
+}
+
+function computeFieldPositions(teamPlayers){
+  const n = teamPlayers.length;
+  if(n===0) return teamPlayers;
+  const base = Math.floor(n/3), rem = n%3;
+  const idealArr = [base,base,base];
+  for(let i=0;i<rem;i++) idealArr[i]++;
+  const ideal = { D:idealArr[0], M:idealArr[1], A:idealArr[2] };
+
+  const bucket = { D:[], M:[], A:[] };
+  teamPlayers.forEach(p=>{ p.fieldPosition = p.position; bucket[p.position].push(p); });
+
+  let guard = 0;
+  while(guard++ < 60){
+    let moved = false;
+    for(let i=0;i<3;i++){
+      const line = POS_ORDER[i];
+      if(bucket[line].length > ideal[line]){
+        const neighbors = [];
+        if(i>0) neighbors.push(POS_ORDER[i-1]);
+        if(i<2) neighbors.push(POS_ORDER[i+1]);
+        for(const nb of neighbors){
+          if(bucket[nb].length < ideal[nb]){
+            bucket[line].sort((a,b)=>a.rating-b.rating); // shift lowest-rated first, arbitrary tiebreak
+            const mover = bucket[line].pop();
+            mover.fieldPosition = nb;
+            bucket[nb].push(mover);
+            moved = true; break;
+          }
+        }
+      }
+      if(moved) break;
+    }
+    if(!moved) break;
+  }
+  return teamPlayers;
+}
+
+function recompute(s){
+  computeTeams(s.players);
+  const teamA = s.players.filter(p=>p.team==="A");
+  const teamB = s.players.filter(p=>p.team==="B");
+  computeFieldPositions(teamA);
+  computeFieldPositions(teamB);
+  return s;
+}
+
+/* ============ REVEAL LOGIC ============ */
+function isRevealed(s){
+  if(s.revealNow) return true;
+  if(!s.cutoffISO) return false;
+  return new Date() >= new Date(s.cutoffISO);
+}
+
+/* ============ RENDER: VOTE TAB ============ */
+function myEntry(){ return session.players.find(p => p.deviceToken === deviceToken); }
+
+function renderVote(){
+  const existing = myEntry();
+  if(existing){ draftPosition = existing.position; draftRating = existing.rating; }
+  const el = document.getElementById("tab-vote");
+  el.innerHTML = `
+    <div class="card">
+      <h2>${existing ? "Update your entry" : "Cast your vote"}</h2>
+      <p class="sub">${existing ? "You've already voted on this device — changes update your existing entry." : "One entry per device. Be honest with the rating, the algorithm relies on it."}</p>
+
+      <label>Name / alias</label>
+      <input type="text" id="f-name" placeholder="e.g. Rafi" value="${existing ? escapeHtml(existing.name) : ""}" />
+
+      <label>Position</label>
+      <div class="pos-picker">
+        <div class="pos-btn ${draftPosition==='D'?'active':''}" data-pos="D">Defense</div>
+        <div class="pos-btn ${draftPosition==='M'?'active':''}" data-pos="M">Mid</div>
+        <div class="pos-btn ${draftPosition==='A'?'active':''}" data-pos="A">Attack</div>
+      </div>
+
+      <label>Your honest rating</label>
+      <div class="rating-row">
+        <input type="range" id="f-rating" min="1" max="10" step="1" value="${draftRating}" />
+        <div class="rating-badge" id="f-rating-badge">${draftRating}</div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="f-injured" ${existing && existing.injured ? "checked" : ""}/>
+        <span>Carrying an injury / niggle today</span>
+      </div>
+
+      <label>Comment (injury detail, availability, etc.)</label>
+      <textarea id="f-comment" placeholder="Optional">${existing ? escapeHtml(existing.comment||"") : ""}</textarea>
+
+      <label>Prefer to play with (optional)</label>
+      <input type="text" id="f-prefer" placeholder="Name of a teammate you'd like on your side" value="${existing ? escapeHtml(existing.preferWith||"") : ""}" />
+
+      <button class="btn btn-primary" id="submitVote">${existing ? "Update vote" : "Submit vote"}</button>
+      ${existing ? '<button class="btn btn-outline" id="withdrawVote">Withdraw my vote</button>' : ""}
+      <div id="voteMsg"></div>
+    </div>
+  `;
+
+  el.querySelectorAll(".pos-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      draftPosition = btn.dataset.pos;
+      el.querySelectorAll(".pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === draftPosition));
+    });
+  });
+  const rangeInput = document.getElementById("f-rating");
+  rangeInput.addEventListener("input", (e)=>{
+    draftRating = parseInt(e.target.value,10);
+    document.getElementById("f-rating-badge").textContent = draftRating;
+  });
+  document.getElementById("submitVote").addEventListener("click", onSubmitVote);
+  if(existing){
+    document.getElementById("withdrawVote").addEventListener("click", onWithdrawVote);
+  }
+}
+
+async function onSubmitVote(){
+  const name = document.getElementById("f-name").value.trim();
+  if(!name){ showMsg("voteMsg", "Please enter a name or alias.", true); return; }
+  const comment = document.getElementById("f-comment").value.trim();
+  const prefer = document.getElementById("f-prefer").value.trim();
+  const injured = document.getElementById("f-injured").checked;
+
+  session = await loadSession();
+  let entry = session.players.find(p=>p.deviceToken===deviceToken);
+  if(!entry){
+    entry = { id: uid(), deviceToken, votedAt: new Date().toISOString() };
+    session.players.push(entry);
+  }
+  entry.name = name;
+  entry.position = draftPosition;
+  entry.rating = draftRating;
+  entry.injured = injured;
+  entry.comment = comment;
+  entry.preferWith = prefer;
+  entry.sitOut = false;
+
+  recompute(session);
+  await saveSession(session);
+  showMsg("voteMsg", "Saved. Head to 'My Status' to see your placement.", false);
+  renderVote();
+}
+
+async function onWithdrawVote(){
+  session = await loadSession();
+  session.players = session.players.filter(p=>p.deviceToken!==deviceToken);
+  recompute(session);
+  await saveSession(session);
+  renderVote();
+}
+
+/* ============ RENDER: STATUS TAB ============ */
+function renderStatus(){
+  const el = document.getElementById("tab-status");
+  const entry = myEntry();
+  if(!entry){
+    el.innerHTML = `<div class="card"><h2>No vote yet</h2><p class="sub">Head to the Vote tab to submit your entry from this device.</p></div>`;
+    return;
+  }
+  const revealed = isRevealed(session);
+  let cutoffLine = "The coordinator hasn't set a reveal time yet.";
+  if(session.cutoffISO){
+    const d = new Date(session.cutoffISO);
+    cutoffLine = revealed ? "Rosters are live." : `Rosters reveal at ${d.toLocaleString()}.`;
+  }
+
+  if(!revealed){
+    el.innerHTML = `
+      <div class="ticket">
+        <div class="lock">🔒</div>
+        <div class="note">You're placed. Your team-mates stay hidden until reveal.</div>
+        <div class="team-stamp ${entry.team==='A'?'a':'b'}">Team ${entry.team || '—'}</div>
+        <div class="countdown">${cutoffLine}</div>
+      </div>
+      <div class="card">
+        <h2>Your entry</h2>
+        <p class="sub">Position: <strong>${posLabel(entry.position)}</strong> · Rating: <strong>${entry.rating}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
+      </div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `<div class="card"><h2>Rosters are live</h2><p class="sub">${cutoffLine}</p></div>` + renderPitches();
+}
+
+function posLabel(p){ return {D:"Defense", M:"Mid", A:"Attack"}[p]; }
+
+function renderPitches(){
+  const teamA = session.players.filter(p=>p.team==="A" && !p.sitOut);
+  const teamB = session.players.filter(p=>p.team==="B" && !p.sitOut);
+  function avg(list){ return list.length ? (list.reduce((s,p)=>s+p.rating,0)/list.length).toFixed(1) : "–"; }
+  function pitchHtml(team, label, cls){
+    const lines = {D:[], M:[], A:[]};
+    team.forEach(p => lines[p.fieldPosition||p.position].push(p));
+    function chip(p){
+      const shiftedNote = p.fieldPosition!==p.position ? `<span class="shifted">(from ${posLabel(p.position)})</span>` : "";
+      return `<div class="chip"><span>${escapeHtml(p.name)}</span><span class="r">${p.rating}</span>${p.injured?'<span class="inj">✚</span>':''}${shiftedNote}</div>`;
+    }
+    return `
+      <div class="mini-pitch">
+        <h3>${label} <span class="avg">avg ${avg(team)} · ${team.length} players</span></h3>
+        <div class="line-label">Attack</div>
+        <div class="line">${lines.A.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+        <div class="line-label">Mid</div>
+        <div class="line">${lines.M.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+        <div class="line-label">Defense</div>
+        <div class="line">${lines.D.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+      </div>
+    `;
+  }
+  return `<div class="pitch-wrap">${pitchHtml(teamA,"Team A","a")}${pitchHtml(teamB,"Team B","b")}</div>`;
+}
+
+/* ============ RENDER: ADMIN TAB ============ */
+function renderAdmin(){
+  const el = document.getElementById("tab-admin");
+  if(!adminUnlocked){
+    el.innerHTML = `
+      <div class="card locked-gate">
+        <h2>Coordinator access</h2>
+        <p class="sub">Enter the passcode to manage this session.</p>
+        <input type="text" id="admPass" placeholder="Passcode" />
+        <button class="btn btn-primary" id="admUnlock">Unlock</button>
+        <div id="admMsg"></div>
+      </div>
+    `;
+    document.getElementById("admUnlock").addEventListener("click", async ()=>{
+      const val = document.getElementById("admPass").value;
+      const hash = await sha256Hex(val);
+      if(hash === ADMIN_PASSCODE_HASH){ adminUnlocked = true; renderAdmin(); }
+      else{ showMsg("admMsg", "Wrong passcode.", true); }
+    });
+    return;
+  }
+
+  const cutoffVal = session.cutoffISO ? toLocalInputValue(session.cutoffISO) : "";
+  const rows = session.players.map(p => `
+    <tr>
+      <td><input type="text" data-id="${p.id}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/></td>
+      <td>
+        <select data-id="${p.id}" data-field="position">
+          <option value="D" ${p.position==='D'?'selected':''}>D</option>
+          <option value="M" ${p.position==='M'?'selected':''}>M</option>
+          <option value="A" ${p.position==='A'?'selected':''}>A</option>
+        </select>
+      </td>
+      <td><input type="text" inputmode="numeric" data-id="${p.id}" data-field="rating" value="${p.rating}" style="width:36px"/></td>
+      <td><input type="checkbox" data-id="${p.id}" data-field="injured" ${p.injured?'checked':''}/></td>
+      <td><input type="checkbox" data-id="${p.id}" data-field="sitOut" ${p.sitOut?'checked':''}/></td>
+      <td>
+        <select data-id="${p.id}" data-field="teamOverride">
+          <option value="" ${!p.teamOverride?'selected':''}>Auto</option>
+          <option value="A" ${p.teamOverride==='A'?'selected':''}>Force A</option>
+          <option value="B" ${p.teamOverride==='B'?'selected':''}>Force B</option>
+        </select>
+      </td>
+      <td>${p.team ? `<span class="team-tag ${p.team==='A'?'a':'b'}">${p.team}</span>` : '—'}</td>
+      <td class="row-actions"><button class="icon-btn danger" data-del="${p.id}">✕</button></td>
+    </tr>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>Session controls</h2>
+      <p class="sub">${session.players.length} votes in · created ${new Date(session.createdAt).toLocaleString()}</p>
+      <label>Reveal cutoff time</label>
+      <input type="datetime-local" id="admCutoff" value="${cutoffVal}" />
+      <button class="btn btn-outline" id="admSaveCutoff">Save cutoff time</button>
+      <button class="btn ${session.revealNow ? 'btn-danger' : 'btn-primary'}" id="admRevealToggle">${session.revealNow ? "Hide rosters again" : "Reveal rosters now"}</button>
+      <button class="btn btn-outline" id="admRecompute">Force recompute teams</button>
+      <button class="btn btn-danger" id="admReset">Start new session (clears all votes)</button>
+      <div id="admMsg2"></div>
+    </div>
+
+    <div class="card" style="overflow-x:auto">
+      <h2>All entries</h2>
+      <p class="sub">Edit any field to correct a false claim. Changes save immediately and teams recompute.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Pos</th><th>Rtg</th><th>Inj</th><th>Sit out</th><th>Team lock</th><th>Team</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="color:var(--ink-soft)">No votes yet.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById("admSaveCutoff").addEventListener("click", async ()=>{
+    const val = document.getElementById("admCutoff").value;
+    session = await loadSession();
+    session.cutoffISO = val ? new Date(val).toISOString() : null;
+    await saveSession(session);
+    showMsg("admMsg2", "Cutoff time saved.", false);
+  });
+  document.getElementById("admRevealToggle").addEventListener("click", async ()=>{
+    session = await loadSession();
+    session.revealNow = !session.revealNow;
+    await saveSession(session);
+    renderAdmin();
+  });
+  document.getElementById("admRecompute").addEventListener("click", async ()=>{
+    session = await loadSession();
+    recompute(session);
+    await saveSession(session);
+    showMsg("admMsg2", "Teams recomputed.", false);
+  });
+  document.getElementById("admReset").addEventListener("click", async ()=>{
+    if(!confirm("This clears every vote for a fresh session. Continue?")) return;
+    session = emptySession();
+    await saveSession(session);
+    renderAdmin();
+  });
+  el.querySelectorAll("[data-del]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      session = await loadSession();
+      session.players = session.players.filter(p=>p.id!==btn.dataset.del);
+      recompute(session);
+      await saveSession(session);
+      renderAdmin();
+    });
+  });
+  el.querySelectorAll("[data-field]").forEach(input=>{
+    input.addEventListener("change", async (e)=>{
+      const id = e.target.dataset.id, field = e.target.dataset.field;
+      session = await loadSession();
+      const p = session.players.find(pp=>pp.id===id);
+      if(!p) return;
+      if(field==="injured" || field==="sitOut"){ p[field] = e.target.checked; }
+      else if(field==="rating"){ p.rating = Math.max(1, Math.min(10, parseInt(e.target.value,10)||1)); }
+      else if(field==="teamOverride"){ p.teamOverride = e.target.value || null; }
+      else{ p[field] = e.target.value; }
+      recompute(session);
+      await saveSession(session);
+      renderAdmin();
+    });
+  });
+}
+
+function toLocalInputValue(iso){
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ============ SHARED HELPERS ============ */
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function showMsg(targetId, text, isErr){
+  const target = document.getElementById(targetId) || document.getElementById(targetId+"Msg");
+  if(!target) return;
+  target.innerHTML = `<div class="msg ${isErr?'msg-err':'msg-ok'}">${text}</div>`;
+  setTimeout(()=>{ if(target) target.innerHTML=""; }, 4000);
+}
+
+function renderActiveTab(){
+  if(activeTab==="vote") renderVote();
+  if(activeTab==="status") renderStatus();
+  if(activeTab==="admin") renderAdmin();
+}
+
+document.querySelectorAll(".tab").forEach(tab=>{
+  tab.addEventListener("click", ()=>{
+    document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+    tab.classList.add("active");
+    activeTab = tab.dataset.tab;
+    document.getElementById("tab-vote").style.display = activeTab==="vote" ? "block":"none";
+    document.getElementById("tab-status").style.display = activeTab==="status" ? "block":"none";
+    document.getElementById("tab-admin").style.display = activeTab==="admin" ? "block":"none";
+    renderActiveTab();
+  });
+});
+
+/* ============ TYPING GUARD ============ */
+// Prevents background polling from rebuilding a form while someone has a
+// field focused (this was the bug — typing got wiped every poll tick).
+let isEditingField = false;
+document.addEventListener("focusin", (e)=>{
+  if(e.target.matches("input, textarea, select")) isEditingField = true;
+});
+document.addEventListener("focusout", (e)=>{
+  if(e.target.matches("input, textarea, select")){
+    setTimeout(()=>{
+      const active = document.activeElement;
+      if(!active || !active.matches("input, textarea, select")) isEditingField = false;
+    }, 50);
+  }
+});
+
+/* ============ INIT + LIVE SYNC ============ */
+// Firebase pushes updates the instant anyone's data changes — no polling needed.
+function init(){
+  onValue(sessionRef, (snap)=>{
+    const fresh = normalizeSession(snap.exists() ? snap.val() : null);
+    recompute(fresh);
+    session = fresh;
+    // Voting is a personal action — never disturb that tab with a live refresh.
+    if(activeTab === "vote") return;
+    // Don't rebuild out from under an in-progress edit anywhere else (e.g. admin table).
+    if(isEditingField) return;
+    renderActiveTab();
+  }, (err)=>{
+    console.error("Live sync error", err);
+  });
+}
+init();
+</script>
+</body>
+</html>
