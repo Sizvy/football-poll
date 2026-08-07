@@ -59,6 +59,16 @@
   header p{
     margin:0; color:rgba(245,241,230,0.7); font-size:14px;
   }
+  .vote-tally{
+    display:inline-block;
+    font-family:var(--display); text-transform:uppercase; letter-spacing:0.08em;
+    font-size:12px; font-weight:700;
+    background:rgba(227,167,43,0.15);
+    color:var(--amber);
+    border:1px solid rgba(227,167,43,0.4);
+    padding:5px 14px; border-radius:999px;
+    margin-top:10px;
+  }
   .tabs{
     display:flex; justify-content:center; gap:6px;
     padding:0 16px 20px; flex-wrap:wrap;
@@ -191,6 +201,7 @@
   <div class="eyebrow">Pickup football · squad builder</div>
   <h1>Matchday Sheet</h1>
   <p id="headerSub">Vote in, get placed. No line-ups shown before kickoff prep.</p>
+  <div class="vote-tally" id="voteTally">– voted</div>
 </header>
 
 <div class="tabs">
@@ -419,9 +430,22 @@ function isRevealed(s){
 function myEntry(){ return session.players.find(p => p.deviceToken === deviceToken); }
 
 function renderVote(){
+  const el = document.getElementById("tab-vote");
+
+  if(isRevealed(session)){
+    const existing = myEntry();
+    el.innerHTML = `
+      <div class="card">
+        <h2>Voting is closed</h2>
+        <p class="sub">Rosters have been revealed for this session, so votes are locked to keep teams from shifting after everyone's seen them.</p>
+        ${existing ? `<p class="hint">You voted as <strong>${escapeHtml(existing.name)}</strong>. Check the "My Status" tab to see the final teams.</p>` : `<p class="hint">You didn't get a vote in before reveal — catch the next session.</p>`}
+      </div>
+    `;
+    return;
+  }
+
   const existing = myEntry();
   if(existing){ draftPosition = existing.position; draftRating = existing.rating; }
-  const el = document.getElementById("tab-vote");
   el.innerHTML = `
     <div class="card">
       <h2>${existing ? "Update your entry" : "Cast your vote"}</h2>
@@ -485,6 +509,8 @@ async function onSubmitVote(){
   const injured = document.getElementById("f-injured").checked;
 
   session = await loadSession();
+  if(isRevealed(session)){ renderVote(); return; } // reveal happened while this form was open
+
   let entry = session.players.find(p=>p.deviceToken===deviceToken);
   if(!entry){
     entry = { id: uid(), deviceToken, votedAt: new Date().toISOString() };
@@ -506,6 +532,7 @@ async function onSubmitVote(){
 
 async function onWithdrawVote(){
   session = await loadSession();
+  if(isRevealed(session)){ renderVote(); return; }
   session.players = session.players.filter(p=>p.deviceToken!==deviceToken);
   recompute(session);
   await saveSession(session);
@@ -749,11 +776,18 @@ document.addEventListener("focusout", (e)=>{
 
 /* ============ INIT + LIVE SYNC ============ */
 // Firebase pushes updates the instant anyone's data changes — no polling needed.
+function renderVoteCount(){
+  const el = document.getElementById("voteTally");
+  if(!el) return;
+  const n = session.players.length;
+  el.textContent = n === 1 ? "1 player voted" : `${n} players voted`;
+}
 function init(){
   onValue(sessionRef, (snap)=>{
     const fresh = normalizeSession(snap.exists() ? snap.val() : null);
     recompute(fresh);
     session = fresh;
+    renderVoteCount(); // always live, regardless of tab or in-progress typing
     // Voting is a personal action — never disturb that tab with a live refresh.
     if(activeTab === "vote") return;
     // Don't rebuild out from under an in-progress edit anywhere else (e.g. admin table).
