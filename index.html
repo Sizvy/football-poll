@@ -277,9 +277,15 @@ function normalizeSession(raw){
   const playersRaw = (raw && raw.players) || {};
   // Handles both the new keyed shape ({token: {...}}) and the old array
   // shape ([{...}, {...}]) left over from before this data model changed.
+  // _dbKey is always the REAL Firebase key for this record — for legacy
+  // array data that's the numeric index, not the old internal `id` field —
+  // so admin edit/delete always target the actual address in the database.
   const players = Array.isArray(playersRaw)
-    ? playersRaw.map((p, i) => ({ id: p.deviceToken || p.id || String(i), deviceToken: p.deviceToken || p.id || String(i), ...p }))
-    : Object.keys(playersRaw).map(key => ({ id: key, deviceToken: key, ...playersRaw[key] }));
+    ? playersRaw.map((p, i) => {
+        const dbKey = String(i);
+        return { id: p.deviceToken || p.id || dbKey, deviceToken: p.deviceToken || p.id || dbKey, ...p, _dbKey: dbKey };
+      })
+    : Object.keys(playersRaw).map(key => ({ id: key, deviceToken: key, ...playersRaw[key], _dbKey: key }));
   // Prefer the new nested meta fields, but fall back to the old top-level
   // ones so sessions created before this update don't lose their reveal/cutoff state.
   return {
@@ -627,26 +633,26 @@ function renderAdmin(){
   const cutoffVal = session.cutoffISO ? toLocalInputValue(session.cutoffISO) : "";
   const rows = session.players.map(p => `
     <tr>
-      <td><input type="text" data-id="${p.id}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/></td>
+      <td><input type="text" data-id="${p._dbKey}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/></td>
       <td>
-        <select data-id="${p.id}" data-field="position">
+        <select data-id="${p._dbKey}" data-field="position">
           <option value="D" ${p.position==='D'?'selected':''}>D</option>
           <option value="M" ${p.position==='M'?'selected':''}>M</option>
           <option value="A" ${p.position==='A'?'selected':''}>A</option>
         </select>
       </td>
-      <td><input type="text" inputmode="numeric" data-id="${p.id}" data-field="rating" value="${p.rating}" style="width:36px"/></td>
-      <td><input type="checkbox" data-id="${p.id}" data-field="injured" ${p.injured?'checked':''}/></td>
-      <td><input type="checkbox" data-id="${p.id}" data-field="sitOut" ${p.sitOut?'checked':''}/></td>
+      <td><input type="text" inputmode="numeric" data-id="${p._dbKey}" data-field="rating" value="${p.rating}" style="width:36px"/></td>
+      <td><input type="checkbox" data-id="${p._dbKey}" data-field="injured" ${p.injured?'checked':''}/></td>
+      <td><input type="checkbox" data-id="${p._dbKey}" data-field="sitOut" ${p.sitOut?'checked':''}/></td>
       <td>
-        <select data-id="${p.id}" data-field="teamOverride">
+        <select data-id="${p._dbKey}" data-field="teamOverride">
           <option value="" ${!p.teamOverride?'selected':''}>Auto</option>
           <option value="A" ${p.teamOverride==='A'?'selected':''}>Force A</option>
           <option value="B" ${p.teamOverride==='B'?'selected':''}>Force B</option>
         </select>
       </td>
       <td>${p.team ? `<span class="team-tag ${p.team==='A'?'a':'b'}">${p.team}</span>` : '—'}</td>
-      <td class="row-actions"><button class="icon-btn danger" data-del="${p.id}">✕</button></td>
+      <td class="row-actions"><button class="icon-btn danger" data-del="${p._dbKey}">✕</button></td>
     </tr>
   `).join("");
 
