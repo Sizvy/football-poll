@@ -253,6 +253,8 @@ let adminUnlocked = false;
 let activeTab = "vote";
 let draftPosition = "M";
 let draftRating = 6;
+let adminAddPosition = "M";
+let adminAddRating = 6;
 
 function getDeviceToken(){
   let t = localStorage.getItem("ff_device_token");
@@ -633,7 +635,7 @@ function renderAdmin(){
   const cutoffVal = session.cutoffISO ? toLocalInputValue(session.cutoffISO) : "";
   const rows = session.players.map(p => `
     <tr>
-      <td><input type="text" data-id="${p._dbKey}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/></td>
+      <td><input type="text" data-id="${p._dbKey}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/>${p.addedByAdmin ? '<div class="hint" style="margin-top:2px;">added by admin</div>' : ''}</td>
       <td>
         <select data-id="${p._dbKey}" data-field="position">
           <option value="D" ${p.position==='D'?'selected':''}>D</option>
@@ -668,6 +670,41 @@ function renderAdmin(){
       <div id="admMsg2"></div>
     </div>
 
+    <div class="card">
+      <h2>Add a player manually</h2>
+      <p class="sub">For anyone who can't vote themselves — same fields as the normal form.</p>
+
+      <label>Name</label>
+      <input type="text" id="admAddName" placeholder="e.g. Rafi" />
+
+      <label>Position</label>
+      <div class="pos-picker" id="admAddPosPicker">
+        <div class="pos-btn ${adminAddPosition==='D'?'active':''}" data-pos="D">Defense</div>
+        <div class="pos-btn ${adminAddPosition==='M'?'active':''}" data-pos="M">Mid</div>
+        <div class="pos-btn ${adminAddPosition==='A'?'active':''}" data-pos="A">Attack</div>
+      </div>
+
+      <label>Rating</label>
+      <div class="rating-row">
+        <input type="range" id="admAddRating" min="1" max="10" step="1" value="${adminAddRating}" />
+        <div class="rating-badge" id="admAddRatingBadge">${adminAddRating}</div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="admAddInjured"/>
+        <span>Carrying an injury / niggle</span>
+      </div>
+
+      <label>Comment</label>
+      <textarea id="admAddComment" placeholder="Optional"></textarea>
+
+      <label>Prefer to play with</label>
+      <input type="text" id="admAddPrefer" placeholder="Optional" />
+
+      <button class="btn btn-primary" id="admAddSubmit">Add player</button>
+      <div id="admAddMsg"></div>
+    </div>
+
     <div class="card" style="overflow-x:auto">
       <h2>All entries</h2>
       <p class="sub">Edit any field to correct a false claim. Changes save immediately and teams recompute.</p>
@@ -697,6 +734,47 @@ function renderAdmin(){
     if(!confirm("This clears every vote for a fresh session. Continue?")) return;
     await resetSession();
   });
+
+  el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      adminAddPosition = btn.dataset.pos;
+      el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === adminAddPosition));
+    });
+  });
+  document.getElementById("admAddRating").addEventListener("input", (e)=>{
+    adminAddRating = parseInt(e.target.value, 10);
+    document.getElementById("admAddRatingBadge").textContent = adminAddRating;
+  });
+  document.getElementById("admAddSubmit").addEventListener("click", async ()=>{
+    const name = document.getElementById("admAddName").value.trim();
+    if(!name){ showMsg("admAddMsg", "Enter a name first.", true); return; }
+    const comment = document.getElementById("admAddComment").value.trim();
+    const prefer = document.getElementById("admAddPrefer").value.trim();
+    const injured = document.getElementById("admAddInjured").checked;
+    // "manual_" prefix keeps these visually distinct from real dev_ device tokens,
+    // and guarantees no collision with anyone's real vote.
+    const key = "manual_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try{
+      await set(playerRef(key), {
+        name, position: adminAddPosition, rating: adminAddRating,
+        injured, comment, preferWith: prefer, sitOut: false,
+        votedAt: new Date().toISOString(), addedByAdmin: true
+      });
+      showMsg("admAddMsg", `Added ${name}.`, false);
+      document.getElementById("admAddName").value = "";
+      document.getElementById("admAddComment").value = "";
+      document.getElementById("admAddPrefer").value = "";
+      document.getElementById("admAddInjured").checked = false;
+      adminAddPosition = "M"; adminAddRating = 6;
+      document.getElementById("admAddRating").value = 6;
+      document.getElementById("admAddRatingBadge").textContent = 6;
+      el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === "M"));
+    }catch(e){
+      console.error(e);
+      showMsg("admAddMsg", "Could not save — check your connection.", true);
+    }
+  });
+
   el.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", async ()=>{
       try{
