@@ -220,7 +220,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
-import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
+import { getDatabase, ref, get, set, update, remove, onValue } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
 
 /* ============ CONFIG ============ */
 // Passcode is stored as a SHA-256 hash, not plaintext, so it isn't trivially
@@ -259,22 +259,34 @@ function getDeviceToken(){
   if(!t){ t = "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("ff_device_token", t); }
   return t;
 }
-function uid(){ return "p_" + Math.random().toString(36).slice(2,9); }
+function playerRef(token){ return ref(db, "sessions/current/players/" + token); }
+const metaRef = ref(db, "sessions/current/meta");
 
 function emptySession(){
   return { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false, players: [] };
 }
 
-// Firebase RTDB silently omits empty arrays/objects and null fields when saving.
-// Any read has to re-hydrate those back to safe defaults, or code that assumes
-// session.players is always an array (e.g. .find, .push) will crash.
+// Raw Firebase shape keeps each player under their own key
+// (sessions/current/players/{deviceToken}) instead of one shared array, so two
+// people voting at the same instant write to different paths and can never
+// clobber each other. normalizeSession() converts that into the flat
+// {createdAt, cutoffISO, revealNow, players:[...]} shape the rest of the app
+// (rendering, the balancing algorithm) already expects — nothing else changes.
 function normalizeSession(raw){
-  if(!raw) return emptySession();
+  const meta = (raw && raw.meta) || {};
+  const playersRaw = (raw && raw.players) || {};
+  // Handles both the new keyed shape ({token: {...}}) and the old array
+  // shape ([{...}, {...}]) left over from before this data model changed.
+  const players = Array.isArray(playersRaw)
+    ? playersRaw.map((p, i) => ({ id: p.deviceToken || p.id || String(i), deviceToken: p.deviceToken || p.id || String(i), ...p }))
+    : Object.keys(playersRaw).map(key => ({ id: key, deviceToken: key, ...playersRaw[key] }));
+  // Prefer the new nested meta fields, but fall back to the old top-level
+  // ones so sessions created before this update don't lose their reveal/cutoff state.
   return {
-    createdAt: raw.createdAt || new Date().toISOString(),
-    cutoffISO: raw.cutoffISO || null,
-    revealNow: !!raw.revealNow,
-    players: Array.isArray(raw.players) ? raw.players : []
+    createdAt: meta.createdAt || (raw && raw.createdAt) || new Date().toISOString(),
+    cutoffISO: (meta.cutoffISO !== undefined ? meta.cutoffISO : (raw && raw.cutoffISO)) || null,
+    revealNow: !!(meta.revealNow !== undefined ? meta.revealNow : (raw && raw.revealNow)),
+    players
   };
 }
 
@@ -288,12 +300,14 @@ async function loadSession(){
     return emptySession();
   }
 }
-async function saveSession(s){
+// Only used for a full session reset (admin "start new session"). Every other
+// write goes through playerRef()/metaRef() scoped writes above/below, on purpose.
+async function resetSession(){
   try{
-    await set(sessionRef, s);
+    await set(sessionRef, { meta: { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false } });
   }catch(e){
-    console.error("Save failed", e);
-    showMsg("vote", "Could not save — check your connection and try again.", true);
+    console.error("Reset failed", e);
+    showMsg("admMsg2", "Could not reset — check your connection and try again.", true);
   }
 }
 
@@ -496,32 +510,33 @@ async function onSubmitVote(){
   const prefer = document.getElementById("f-prefer").value.trim();
   const injured = document.getElementById("f-injured").checked;
 
-  session = await loadSession();
+  try{
+    // Preserve original vote timestamp on an edit, rather than resetting it.
+    let votedAt = new Date().toISOString();
+    const existingSnap = await get(playerRef(deviceToken));
+    if(existingSnap.exists() && existingSnap.val().votedAt){ votedAt = existingSnap.val().votedAt; }
 
-  let entry = session.players.find(p=>p.deviceToken===deviceToken);
-  if(!entry){
-    entry = { id: uid(), deviceToken, votedAt: new Date().toISOString() };
-    session.players.push(entry);
+    // This write only ever touches this one player's own node — someone else
+    // voting at the exact same moment writes to a different path and can't
+    // collide with it, unlike overwriting one shared list.
+    await set(playerRef(deviceToken), {
+      name, position: draftPosition, rating: draftRating,
+      injured, comment, preferWith: prefer, sitOut: false, votedAt
+    });
+    showMsg("voteMsg", "Saved. Head to 'My Status' to see your placement.", false);
+  }catch(e){
+    console.error("Vote save failed", e);
+    showMsg("voteMsg", "Could not save — check your connection and try again.", true);
   }
-  entry.name = name;
-  entry.position = draftPosition;
-  entry.rating = draftRating;
-  entry.injured = injured;
-  entry.comment = comment;
-  entry.preferWith = prefer;
-  entry.sitOut = false;
-
-  recompute(session);
-  await saveSession(session);
-  showMsg("voteMsg", "Saved. Head to 'My Status' to see your placement.", false);
   renderVote();
 }
 
 async function onWithdrawVote(){
-  session = await loadSession();
-  session.players = session.players.filter(p=>p.deviceToken!==deviceToken);
-  recompute(session);
-  await saveSession(session);
+  try{
+    await remove(playerRef(deviceToken));
+  }catch(e){
+    console.error("Withdraw failed", e);
+  }
   renderVote();
 }
 
@@ -643,7 +658,6 @@ function renderAdmin(){
       <input type="datetime-local" id="admCutoff" value="${cutoffVal}" />
       <button class="btn btn-outline" id="admSaveCutoff">Save cutoff time</button>
       <button class="btn ${session.revealNow ? 'btn-danger' : 'btn-primary'}" id="admRevealToggle">${session.revealNow ? "Hide rosters again" : "Reveal rosters now"}</button>
-      <button class="btn btn-outline" id="admRecompute">Force recompute teams</button>
       <button class="btn btn-danger" id="admReset">Start new session (clears all votes)</button>
       <div id="admMsg2"></div>
     </div>
@@ -660,51 +674,43 @@ function renderAdmin(){
 
   document.getElementById("admSaveCutoff").addEventListener("click", async ()=>{
     const val = document.getElementById("admCutoff").value;
-    session = await loadSession();
-    session.cutoffISO = val ? new Date(val).toISOString() : null;
-    await saveSession(session);
-    showMsg("admMsg2", "Cutoff time saved.", false);
+    try{
+      await update(metaRef, { cutoffISO: val ? new Date(val).toISOString() : null });
+      showMsg("admMsg2", "Cutoff time saved.", false);
+    }catch(e){
+      console.error(e);
+      showMsg("admMsg2", "Could not save — check your connection.", true);
+    }
   });
   document.getElementById("admRevealToggle").addEventListener("click", async ()=>{
-    session = await loadSession();
-    session.revealNow = !session.revealNow;
-    await saveSession(session);
-    renderAdmin();
-  });
-  document.getElementById("admRecompute").addEventListener("click", async ()=>{
-    session = await loadSession();
-    recompute(session);
-    await saveSession(session);
-    showMsg("admMsg2", "Teams recomputed.", false);
+    try{
+      await update(metaRef, { revealNow: !session.revealNow });
+    }catch(e){ console.error(e); }
   });
   document.getElementById("admReset").addEventListener("click", async ()=>{
     if(!confirm("This clears every vote for a fresh session. Continue?")) return;
-    session = emptySession();
-    await saveSession(session);
-    renderAdmin();
+    await resetSession();
   });
   el.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", async ()=>{
-      session = await loadSession();
-      session.players = session.players.filter(p=>p.id!==btn.dataset.del);
-      recompute(session);
-      await saveSession(session);
-      renderAdmin();
+      try{
+        await remove(playerRef(btn.dataset.del));
+      }catch(e){ console.error(e); }
     });
   });
   el.querySelectorAll("[data-field]").forEach(input=>{
     input.addEventListener("change", async (e)=>{
       const id = e.target.dataset.id, field = e.target.dataset.field;
-      session = await loadSession();
-      const p = session.players.find(pp=>pp.id===id);
-      if(!p) return;
-      if(field==="injured" || field==="sitOut"){ p[field] = e.target.checked; }
-      else if(field==="rating"){ p.rating = Math.max(1, Math.min(10, parseInt(e.target.value,10)||1)); }
-      else if(field==="teamOverride"){ p.teamOverride = e.target.value || null; }
-      else{ p[field] = e.target.value; }
-      recompute(session);
-      await saveSession(session);
-      renderAdmin();
+      let value;
+      if(field==="injured" || field==="sitOut"){ value = e.target.checked; }
+      else if(field==="rating"){ value = Math.max(1, Math.min(10, parseInt(e.target.value,10)||1)); }
+      else if(field==="teamOverride"){ value = e.target.value || null; }
+      else{ value = e.target.value; }
+      try{
+        // Patches just this one field on this one player — never touches
+        // anyone else's entry, so it can't collide with a concurrent vote.
+        await update(playerRef(id), { [field]: value });
+      }catch(err){ console.error(err); }
     });
   });
 }
