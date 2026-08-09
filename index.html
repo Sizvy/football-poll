@@ -479,7 +479,7 @@ function isRevealed(s){
 function posLabel(p){ return {D:"Defense", M:"Mid", A:"Attack"}[p] || p; }
 
 /* ============ POOL PICKER (reused by Vote tab + Admin proxy-add) ============ */
-function setupPoolPicker(prefix, initialPoolId){
+function setupPoolPicker(prefix, initialPoolId, onSelect){
   let selected = initialPoolId || null;
   const searchEl = document.getElementById(prefix+"Search");
   const listEl = document.getElementById(prefix+"List");
@@ -494,7 +494,9 @@ function setupPoolPicker(prefix, initialPoolId){
     selectedEl.querySelector("[data-clear]").addEventListener("click", ()=>{
       selected = null;
       showSearchView();
+      if(onSelect) onSelect(null);
     });
+    if(onSelect) onSelect(selected);
   }
   function showSearchView(){
     selectedEl.style.display = "none";
@@ -507,8 +509,10 @@ function setupPoolPicker(prefix, initialPoolId){
   function renderList(query){
     const q = query.trim().toLowerCase();
     const matches = pool.filter(p=>p.name.toLowerCase().includes(q)).slice(0,8);
-    listEl.innerHTML = matches.map(p=>`<div class="pool-option" data-id="${p.id}">${escapeHtml(p.name)}</div>`).join("")
-      || '<div class="hint" style="padding:8px;">No matches — add them in the Player Pool tab.</div>';
+    listEl.innerHTML = matches.map(p=>{
+      const already = session.players.some(sp => sp.poolId === p.id && sp.deviceToken !== deviceToken);
+      return `<div class="pool-option" data-id="${p.id}">${escapeHtml(p.name)}${already ? ' <span class="hint" style="display:inline;">· already in session</span>' : ''}</div>`;
+    }).join("") || '<div class="hint" style="padding:8px;">No matches — add them in the Player Pool tab.</div>';
     listEl.querySelectorAll("[data-id]").forEach(opt=>{
       opt.addEventListener("click", ()=>{
         selected = opt.dataset.id;
@@ -517,12 +521,38 @@ function setupPoolPicker(prefix, initialPoolId){
     });
   }
   searchEl.addEventListener("input", (e)=> renderList(e.target.value));
-  if(selected){ showSelectedView(); } else { showSearchView(); }
+  if(selected){ showSelectedView(); } else { showSearchView(); if(onSelect) onSelect(null); }
   return { getSelected: () => selected };
+}
+
+// Shows/hides a warning + "withdraw that entry" action when the picked pool
+// player already has an entry in today's session under a different key.
+function renderConflictBanner(boxId, submitBtnId, conflictKey, name){
+  const box = document.getElementById(boxId);
+  const submitBtn = document.getElementById(submitBtnId);
+  if(!box) return;
+  if(!conflictKey){
+    box.innerHTML = "";
+    if(submitBtn) submitBtn.disabled = false;
+    return;
+  }
+  box.innerHTML = `<div class="msg msg-err">${escapeHtml(name)} is already in today's session. <button class="icon-btn danger" id="${boxId}Withdraw" style="margin-top:6px;">Withdraw that entry</button></div>`;
+  document.getElementById(boxId+"Withdraw").addEventListener("click", async ()=>{
+    try{ await remove(playerRef(conflictKey)); }catch(e){ console.error(e); }
+    box.innerHTML = "";
+    if(submitBtn) submitBtn.disabled = false;
+  });
+  if(submitBtn) submitBtn.disabled = true;
 }
 
 /* ============ RENDER: VOTE TAB ============ */
 function myEntry(){ return session.players.find(p => p.deviceToken === deviceToken); }
+
+function checkVoteConflict(poolId){
+  if(!poolId){ renderConflictBanner("voteConflict","submitVote", null, null); return; }
+  const conflict = session.players.find(p => p.poolId === poolId && p.deviceToken !== deviceToken);
+  renderConflictBanner("voteConflict","submitVote", conflict ? conflict._dbKey : null, conflict ? conflict.name : null);
+}
 
 let votePicker = null;
 function renderVote(){
@@ -547,13 +577,14 @@ function renderVote(){
       <label id="f-injuryNoteLabel" style="display:${existing && existing.injured ? "block" : "none"};">Injury note (optional)</label>
       <textarea id="f-injuryNote" placeholder="Optional" style="display:${existing && existing.injured ? "block" : "none"};">${existing ? escapeHtml(existing.injuryNote||"") : ""}</textarea>
 
+      <div id="voteConflict"></div>
       <button class="btn btn-primary" id="submitVote">${existing ? "Update vote" : "Submit vote"}</button>
       ${existing ? '<button class="btn btn-outline" id="withdrawVote">Withdraw my vote</button>' : ""}
       <div id="voteMsg"></div>
     </div>
   `;
 
-  votePicker = setupPoolPicker("vote", existing ? existing.poolId : null);
+  votePicker = setupPoolPicker("vote", existing ? existing.poolId : null, checkVoteConflict);
 
   document.getElementById("f-injured").addEventListener("change",(e)=>{
     const show = e.target.checked;
@@ -573,9 +604,18 @@ async function onSubmitVote(){
   const injuryNote = document.getElementById("f-injuryNote").value.trim();
 
   try{
-    let votedAt = new Date().toISOString();
-    const existingSnap = await get(playerRef(deviceToken));
-    if(existingSnap.exists() && existingSnap.val().votedAt){ votedAt = existingSnap.val().votedAt; }
+    const snap = await get(ref(db, "sessions/current/players"));
+    const raw = snap.exists() ? snap.val() : {};
+    const conflictKey = Object.keys(raw).find(k => k !== deviceToken && raw[k].poolId === poolId);
+    if(conflictKey){
+      const name = (pool.find(p=>p.id===poolId) || {}).name || "This player";
+      showMsg("voteMsg", `${name} is already in today's session.`, true);
+      renderConflictBanner("voteConflict","submitVote", conflictKey, name);
+      return;
+    }
+
+    const ownRaw = raw[deviceToken];
+    const votedAt = (ownRaw && ownRaw.votedAt) ? ownRaw.votedAt : new Date().toISOString();
 
     await set(playerRef(deviceToken), {
       poolId, injured, injuryNote, sitOut: false, votedAt
@@ -778,8 +818,16 @@ function renderAdminSession(){
     if(!poolId){ showMsg("admVoteMsg", "Pick a player first.", true); return; }
     const injured = document.getElementById("admVoteInjured").checked;
     const injuryNote = document.getElementById("admVoteNote").value.trim();
-    const key = "manual_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
     try{
+      const snap = await get(ref(db, "sessions/current/players"));
+      const raw = snap.exists() ? snap.val() : {};
+      const conflictKey = Object.keys(raw).find(k => raw[k].poolId === poolId);
+      if(conflictKey){
+        const name = (pool.find(p=>p.id===poolId) || {}).name || "This player";
+        showMsg("admVoteMsg", `${name} is already in today's session.`, true);
+        return;
+      }
+      const key = "manual_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
       await set(playerRef(key), { poolId, injured, injuryNote, sitOut:false, votedAt: new Date().toISOString(), addedByAdmin: true });
       showMsg("admVoteMsg", "Added.", false);
       renderAdminSession();
