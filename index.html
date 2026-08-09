@@ -101,7 +101,7 @@
 
   label{ display:block; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-soft); margin:14px 0 6px; }
   label:first-of-type{ margin-top:0; }
-  input[type=text], textarea, select{
+  input[type=text], input[type=number], textarea, select{
     width:100%; padding:11px 12px; border-radius:8px; border:1px solid #d8d0bb;
     background:#fff; font-family:var(--body); font-size:15px; color:var(--ink);
   }
@@ -113,13 +113,6 @@
     transition:all .15s ease;
   }
   .pos-btn.active{ border-color:var(--pitch); background:var(--pitch); color:#fff; }
-
-  .rating-row{ display:flex; align-items:center; gap:12px; }
-  input[type=range]{ flex:1; accent-color:var(--pitch); }
-  .rating-badge{
-    font-family:var(--display); font-weight:800; font-size:20px; color:var(--pitch);
-    background:var(--chalk-2); border-radius:8px; padding:6px 12px; min-width:44px; text-align:center;
-  }
 
   .checkbox-row{ display:flex; align-items:center; gap:10px; margin-top:14px; }
   .checkbox-row input{ width:18px; height:18px; accent-color:var(--red); }
@@ -166,14 +159,13 @@
   .mini-pitch h3{
     font-family:var(--display); text-transform:uppercase; color:var(--chalk); margin:0 0 10px; font-size:15px; letter-spacing:0.06em;
   }
-  .mini-pitch h3 .avg{ color:var(--amber); font-size:12px; margin-left:8px; }
+  .mini-pitch h3 .avg{ color:var(--amber); font-size:11px; margin-left:8px; letter-spacing:0.02em; text-transform:none; font-family:var(--body); font-weight:600; }
   .line{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-bottom:10px; }
   .line-label{ text-align:center; font-size:10px; letter-spacing:0.1em; color:rgba(245,241,230,0.55); text-transform:uppercase; margin-bottom:4px; }
   .chip{
     background:rgba(245,241,230,0.95); color:var(--ink); border-radius:999px; padding:6px 12px;
     font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px;
   }
-  .chip .r{ font-family:var(--display); font-weight:800; color:var(--pitch); }
   .chip .inj{ color:var(--red); }
   .chip .shifted{ font-size:10px; color:var(--ink-soft); font-style:italic; }
 
@@ -191,6 +183,33 @@
   .locked-gate{ text-align:center; padding:20px 0; }
   .locked-gate input{ text-align:center; letter-spacing:0.2em; font-family:var(--display); font-size:18px; }
 
+  .subtabs{ display:flex; gap:6px; margin-bottom:16px; }
+  .subtab{
+    font-family:var(--display); text-transform:uppercase; letter-spacing:0.05em; font-weight:700; font-size:12px;
+    background:var(--chalk-2); border:1px solid #d8d0bb; color:var(--ink-soft);
+    padding:8px 16px; border-radius:999px; cursor:pointer;
+  }
+  .subtab.active{ background:var(--pitch); color:#fff; border-color:var(--pitch); }
+
+  .pool-picker{ position:relative; }
+  .pool-picker-list{
+    margin-top:6px; max-height:220px; overflow-y:auto; border:1px solid #d8d0bb; border-radius:8px; background:#fff;
+  }
+  .pool-option{
+    padding:10px 12px; cursor:pointer; font-size:14px; border-bottom:1px solid var(--chalk-2);
+  }
+  .pool-option:last-child{ border-bottom:none; }
+  .pool-option:hover{ background:var(--chalk-2); }
+  .pool-picker-selected{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--chalk-2); border-radius:8px; padding:10px 12px; margin-top:6px;
+    font-weight:600;
+  }
+  .pool-picker-selected button{
+    font-family:var(--display); text-transform:uppercase; font-size:11px; font-weight:700;
+    background:transparent; border:1px solid var(--ink-soft); border-radius:6px; padding:5px 12px; cursor:pointer;
+  }
+
   footer{ text-align:center; color:rgba(245,241,230,0.4); font-size:12px; padding:20px; }
   .hint{ font-size:12px; color:var(--ink-soft); margin-top:6px; }
 </style>
@@ -200,7 +219,7 @@
 <header>
   <div class="eyebrow">Pickup football · squad builder</div>
   <h1>Matchday Sheet</h1>
-  <p id="headerSub">Vote in, get placed. No line-ups shown before kickoff prep.</p>
+  <p id="headerSub">Pick your name, flag any injuries. Ratings are set by the coordinator, not you.</p>
   <div class="vote-tally" id="voteTally">– voted</div>
 </header>
 
@@ -240,21 +259,22 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const db = getDatabase(fbApp);
 const sessionRef = ref(db, "sessions/current");
+const poolRootRef = ref(db, "pool/players");
 
 async function sha256Hex(str){
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
+function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
 /* ============ STATE ============ */
-let session = emptySession(); // {createdAt, cutoffISO, revealNow, players:[...]}
+let session = null;
+let pool = []; // array of {id, name, rating, stamina, position}
 let deviceToken = getDeviceToken();
 let adminUnlocked = false;
 let activeTab = "vote";
-let draftPosition = "M";
-let draftRating = 6;
-let adminAddPosition = "M";
-let adminAddRating = 6;
+let adminSubTab = "session"; // "session" | "pool"
+let poolAddPosition = "D";
 
 function getDeviceToken(){
   let t = localStorage.getItem("ff_device_token");
@@ -262,40 +282,30 @@ function getDeviceToken(){
   return t;
 }
 function playerRef(token){ return ref(db, "sessions/current/players/" + token); }
+function poolPlayerRef(id){ return ref(db, "pool/players/" + id); }
 const metaRef = ref(db, "sessions/current/meta");
 
 function emptySession(){
   return { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false, players: [] };
 }
 
-// Raw Firebase shape keeps each player under their own key
-// (sessions/current/players/{deviceToken}) instead of one shared array, so two
-// people voting at the same instant write to different paths and can never
-// clobber each other. normalizeSession() converts that into the flat
-// {createdAt, cutoffISO, revealNow, players:[...]} shape the rest of the app
-// (rendering, the balancing algorithm) already expects — nothing else changes.
+// Each vote is stored as {poolId, injured, injuryNote, sitOut, teamOverride, votedAt}
+// keyed by device token — name/rating/stamina/position are NOT stored per vote,
+// they're looked up from the pool at render time (see recompute()).
 function normalizeSession(raw){
   const meta = (raw && raw.meta) || {};
-  const playersRaw = (raw && raw.players) || {};
-  // Handles both the new keyed shape ({token: {...}}) and the old array
-  // shape ([{...}, {...}]) left over from before this data model changed.
-  // _dbKey is always the REAL Firebase key for this record — for legacy
-  // array data that's the numeric index, not the old internal `id` field —
-  // so admin edit/delete always target the actual address in the database.
-  const players = Array.isArray(playersRaw)
-    ? playersRaw.map((p, i) => {
-        const dbKey = String(i);
-        return { id: p.deviceToken || p.id || dbKey, deviceToken: p.deviceToken || p.id || dbKey, ...p, _dbKey: dbKey };
-      })
-    : Object.keys(playersRaw).map(key => ({ id: key, deviceToken: key, ...playersRaw[key], _dbKey: key }));
-  // Prefer the new nested meta fields, but fall back to the old top-level
-  // ones so sessions created before this update don't lose their reveal/cutoff state.
+  const playersObj = (raw && raw.players) || {};
+  const players = Object.keys(playersObj).map(key => ({ id: key, deviceToken: key, _dbKey: key, ...playersObj[key] }));
   return {
-    createdAt: meta.createdAt || (raw && raw.createdAt) || new Date().toISOString(),
-    cutoffISO: (meta.cutoffISO !== undefined ? meta.cutoffISO : (raw && raw.cutoffISO)) || null,
-    revealNow: !!(meta.revealNow !== undefined ? meta.revealNow : (raw && raw.revealNow)),
+    createdAt: meta.createdAt || new Date().toISOString(),
+    cutoffISO: meta.cutoffISO || null,
+    revealNow: !!meta.revealNow,
     players
   };
+}
+function normalizePool(raw){
+  const obj = raw || {};
+  return Object.keys(obj).map(key => ({ id: key, name: "", rating: 50, stamina: 50, position: "M", ...obj[key] }));
 }
 
 /* ============ STORAGE I/O (Firebase Realtime Database) ============ */
@@ -309,7 +319,8 @@ async function loadSession(){
   }
 }
 // Only used for a full session reset (admin "start new session"). Every other
-// write goes through playerRef()/metaRef() scoped writes above/below, on purpose.
+// write goes through playerRef()/metaRef() scoped writes, on purpose, so two
+// people acting at once can never clobber each other.
 async function resetSession(){
   try{
     await set(sessionRef, { meta: { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false } });
@@ -324,45 +335,73 @@ const POS_ORDER = ["D","M","A"];
 
 function cloneState(s){ return JSON.parse(JSON.stringify(s)); }
 
+// Joins each vote with its pool record (name/rating/stamina/position), then
+// runs team assignment + on-field position balancing. session.players ends
+// up holding the merged, computed objects the rest of the app renders.
+function recompute(s){
+  const joined = s.players.map(v=>{
+    const p = pool.find(pp => pp.id === v.poolId);
+    return {
+      ...v,
+      name: p ? p.name : "(unknown player)",
+      rating: p && typeof p.rating === "number" ? p.rating : 50,
+      stamina: p && typeof p.stamina === "number" ? p.stamina : 50,
+      position: p && p.position ? p.position : "M"
+    };
+  });
+  computeTeams(joined);
+  const teamA = joined.filter(p=>p.team==="A");
+  const teamB = joined.filter(p=>p.team==="B");
+  computeFieldPositions(teamA);
+  computeFieldPositions(teamB);
+  s.players = joined;
+  return s;
+}
+
+// Priority order (each tier only matters once the tier above it is tied):
+// 1. headcount   2. stamina   3. position lines   4. rating
+const W_COUNT = 1e9, W_STAMINA = 1e5, W_POS = 1e2, W_RATING = 1;
+
 function computeTeams(players){
   const eligible = players.filter(p => !p.sitOut);
   const overridden = eligible.filter(p => p.teamOverride);
   const rest = eligible.filter(p => !p.teamOverride)
     .slice()
-    .sort((a,b) => b.rating - a.rating || a.id.localeCompare(b.id));
+    .sort((a,b) => (b.rating - a.rating) || (b.stamina - a.stamina) || a.id.localeCompare(b.id));
 
   const state = {
-    A:{count:0, rating:0, pos:{D:0,M:0,A:0}},
-    B:{count:0, rating:0, pos:{D:0,M:0,A:0}}
+    A:{count:0, stamina:0, rating:0, pos:{D:0,M:0,A:0}},
+    B:{count:0, stamina:0, rating:0, pos:{D:0,M:0,A:0}}
   };
   const assign = {};
 
   overridden.forEach(p=>{
     assign[p.id] = p.teamOverride;
     const s = state[p.teamOverride];
-    s.count++; s.rating += p.rating; s.pos[p.position]++;
+    s.count++; s.stamina += p.stamina; s.rating += p.rating; s.pos[p.position]++;
   });
 
   function imbalance(sA, sB){
-    return Math.abs(sA.count - sB.count)*1000
-      + (Math.abs(sA.pos.D-sB.pos.D)+Math.abs(sA.pos.M-sB.pos.M)+Math.abs(sA.pos.A-sB.pos.A))*20
-      + Math.abs(sA.rating - sB.rating);
+    return Math.abs(sA.count - sB.count) * W_COUNT
+      + Math.abs(sA.stamina - sB.stamina) * W_STAMINA
+      + (Math.abs(sA.pos.D-sB.pos.D)+Math.abs(sA.pos.M-sB.pos.M)+Math.abs(sA.pos.A-sB.pos.A)) * W_POS
+      + Math.abs(sA.rating - sB.rating) * W_RATING;
   }
 
   rest.forEach(p=>{
-    const A2 = cloneState(state.A); A2.count++; A2.rating+=p.rating; A2.pos[p.position]++;
-    const B2 = cloneState(state.B); B2.count++; B2.rating+=p.rating; B2.pos[p.position]++;
+    const A2 = cloneState(state.A); A2.count++; A2.stamina+=p.stamina; A2.rating+=p.rating; A2.pos[p.position]++;
+    const B2 = cloneState(state.B); B2.count++; B2.stamina+=p.stamina; B2.rating+=p.rating; B2.pos[p.position]++;
     const scoreA = imbalance(A2, state.B);
     const scoreB = imbalance(state.A, B2);
     const team = scoreA <= scoreB ? "A" : "B";
     assign[p.id] = team;
     const s = state[team];
-    s.count++; s.rating += p.rating; s.pos[p.position]++;
+    s.count++; s.stamina += p.stamina; s.rating += p.rating; s.pos[p.position]++;
   });
 
   function applyMove(p, from, to){
-    state[from].count--; state[from].rating -= p.rating; state[from].pos[p.position]--;
-    state[to].count++; state[to].rating += p.rating; state[to].pos[p.position]++;
+    state[from].count--; state[from].stamina -= p.stamina; state[from].rating -= p.rating; state[from].pos[p.position]--;
+    state[to].count++; state[to].stamina += p.stamina; state[to].rating += p.rating; state[to].pos[p.position]++;
     assign[p.id] = to;
   }
   function swapPlayers(p1, p2){
@@ -372,7 +411,6 @@ function computeTeams(players){
   }
   function totalImbalance(){ return imbalance(state.A, state.B); }
 
-  // local swap-improvement pass (bounded)
   let improved = true, iter = 0;
   const movable = eligible.filter(p=>!p.teamOverride);
   while(improved && iter < 200){
@@ -417,7 +455,7 @@ function computeFieldPositions(teamPlayers){
         if(i<2) neighbors.push(POS_ORDER[i+1]);
         for(const nb of neighbors){
           if(bucket[nb].length < ideal[nb]){
-            bucket[line].sort((a,b)=>a.rating-b.rating); // shift lowest-rated first, arbitrary tiebreak
+            bucket[line].sort((a,b)=>a.rating-b.rating);
             const mover = bucket[line].pop();
             mover.fieldPosition = nb;
             bucket[nb].push(mover);
@@ -432,61 +470,82 @@ function computeFieldPositions(teamPlayers){
   return teamPlayers;
 }
 
-function recompute(s){
-  computeTeams(s.players);
-  const teamA = s.players.filter(p=>p.team==="A");
-  const teamB = s.players.filter(p=>p.team==="B");
-  computeFieldPositions(teamA);
-  computeFieldPositions(teamB);
-  return s;
-}
-
 /* ============ REVEAL LOGIC ============ */
 function isRevealed(s){
   if(s.revealNow) return true;
   if(!s.cutoffISO) return false;
   return new Date() >= new Date(s.cutoffISO);
 }
+function posLabel(p){ return {D:"Defense", M:"Mid", A:"Attack"}[p] || p; }
+
+/* ============ POOL PICKER (reused by Vote tab + Admin proxy-add) ============ */
+function setupPoolPicker(prefix, initialPoolId){
+  let selected = initialPoolId || null;
+  const searchEl = document.getElementById(prefix+"Search");
+  const listEl = document.getElementById(prefix+"List");
+  const selectedEl = document.getElementById(prefix+"Selected");
+
+  function showSelectedView(){
+    const p = pool.find(pp=>pp.id===selected);
+    searchEl.style.display = "none";
+    listEl.style.display = "none";
+    selectedEl.style.display = "flex";
+    selectedEl.innerHTML = `<span>${p ? escapeHtml(p.name) : "Unknown"}</span><button type="button" data-clear>Change</button>`;
+    selectedEl.querySelector("[data-clear]").addEventListener("click", ()=>{
+      selected = null;
+      showSearchView();
+    });
+  }
+  function showSearchView(){
+    selectedEl.style.display = "none";
+    searchEl.style.display = "block";
+    listEl.style.display = "block";
+    searchEl.value = "";
+    renderList("");
+    searchEl.focus();
+  }
+  function renderList(query){
+    const q = query.trim().toLowerCase();
+    const matches = pool.filter(p=>p.name.toLowerCase().includes(q)).slice(0,8);
+    listEl.innerHTML = matches.map(p=>`<div class="pool-option" data-id="${p.id}">${escapeHtml(p.name)}</div>`).join("")
+      || '<div class="hint" style="padding:8px;">No matches — add them in the Player Pool tab.</div>';
+    listEl.querySelectorAll("[data-id]").forEach(opt=>{
+      opt.addEventListener("click", ()=>{
+        selected = opt.dataset.id;
+        showSelectedView();
+      });
+    });
+  }
+  searchEl.addEventListener("input", (e)=> renderList(e.target.value));
+  if(selected){ showSelectedView(); } else { showSearchView(); }
+  return { getSelected: () => selected };
+}
 
 /* ============ RENDER: VOTE TAB ============ */
 function myEntry(){ return session.players.find(p => p.deviceToken === deviceToken); }
 
+let votePicker = null;
 function renderVote(){
   const el = document.getElementById("tab-vote");
-
   const existing = myEntry();
-  if(existing){ draftPosition = existing.position; draftRating = existing.rating; }
   el.innerHTML = `
     <div class="card">
       <h2>${existing ? "Update your entry" : "Cast your vote"}</h2>
-      <p class="sub">${existing ? "You've already voted on this device — changes update your existing entry." : "One entry per device. Be honest with the rating, the algorithm relies on it."}</p>
+      <p class="sub">${existing ? "You've already voted on this device — changes update your existing entry." : "One entry per device. Search for your name below."}</p>
 
-      <label>Name / alias</label>
-      <input type="text" id="f-name" placeholder="e.g. Rafi" value="${existing ? escapeHtml(existing.name) : ""}" />
-
-      <label>Position</label>
-      <div class="pos-picker">
-        <div class="pos-btn ${draftPosition==='D'?'active':''}" data-pos="D">Defense</div>
-        <div class="pos-btn ${draftPosition==='M'?'active':''}" data-pos="M">Mid</div>
-        <div class="pos-btn ${draftPosition==='A'?'active':''}" data-pos="A">Attack</div>
-      </div>
-
-      <label>Your honest rating</label>
-      <div class="rating-row">
-        <input type="range" id="f-rating" min="1" max="10" step="1" value="${draftRating}" />
-        <div class="rating-badge" id="f-rating-badge">${draftRating}</div>
+      <label>Your name</label>
+      <div class="pool-picker">
+        <input type="text" id="voteSearch" placeholder="Search your name..." autocomplete="off" />
+        <div class="pool-picker-list" id="voteList"></div>
+        <div class="pool-picker-selected" id="voteSelected" style="display:none;"></div>
       </div>
 
       <div class="checkbox-row">
         <input type="checkbox" id="f-injured" ${existing && existing.injured ? "checked" : ""}/>
         <span>Carrying an injury / niggle today</span>
       </div>
-
-      <label>Comment (injury detail, availability, etc.)</label>
-      <textarea id="f-comment" placeholder="Optional">${existing ? escapeHtml(existing.comment||"") : ""}</textarea>
-
-      <label>Prefer to play with (optional)</label>
-      <input type="text" id="f-prefer" placeholder="Name of a teammate you'd like on your side" value="${existing ? escapeHtml(existing.preferWith||"") : ""}" />
+      <label id="f-injuryNoteLabel" style="display:${existing && existing.injured ? "block" : "none"};">Injury note (optional)</label>
+      <textarea id="f-injuryNote" placeholder="Optional" style="display:${existing && existing.injured ? "block" : "none"};">${existing ? escapeHtml(existing.injuryNote||"") : ""}</textarea>
 
       <button class="btn btn-primary" id="submitVote">${existing ? "Update vote" : "Submit vote"}</button>
       ${existing ? '<button class="btn btn-outline" id="withdrawVote">Withdraw my vote</button>' : ""}
@@ -494,16 +553,12 @@ function renderVote(){
     </div>
   `;
 
-  el.querySelectorAll(".pos-btn").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      draftPosition = btn.dataset.pos;
-      el.querySelectorAll(".pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === draftPosition));
-    });
-  });
-  const rangeInput = document.getElementById("f-rating");
-  rangeInput.addEventListener("input", (e)=>{
-    draftRating = parseInt(e.target.value,10);
-    document.getElementById("f-rating-badge").textContent = draftRating;
+  votePicker = setupPoolPicker("vote", existing ? existing.poolId : null);
+
+  document.getElementById("f-injured").addEventListener("change",(e)=>{
+    const show = e.target.checked;
+    document.getElementById("f-injuryNoteLabel").style.display = show ? "block" : "none";
+    document.getElementById("f-injuryNote").style.display = show ? "block" : "none";
   });
   document.getElementById("submitVote").addEventListener("click", onSubmitVote);
   if(existing){
@@ -512,24 +567,18 @@ function renderVote(){
 }
 
 async function onSubmitVote(){
-  const name = document.getElementById("f-name").value.trim();
-  if(!name){ showMsg("voteMsg", "Please enter a name or alias.", true); return; }
-  const comment = document.getElementById("f-comment").value.trim();
-  const prefer = document.getElementById("f-prefer").value.trim();
+  const poolId = votePicker ? votePicker.getSelected() : null;
+  if(!poolId){ showMsg("voteMsg", "Please select your name first.", true); return; }
   const injured = document.getElementById("f-injured").checked;
+  const injuryNote = document.getElementById("f-injuryNote").value.trim();
 
   try{
-    // Preserve original vote timestamp on an edit, rather than resetting it.
     let votedAt = new Date().toISOString();
     const existingSnap = await get(playerRef(deviceToken));
     if(existingSnap.exists() && existingSnap.val().votedAt){ votedAt = existingSnap.val().votedAt; }
 
-    // This write only ever touches this one player's own node — someone else
-    // voting at the exact same moment writes to a different path and can't
-    // collide with it, unlike overwriting one shared list.
     await set(playerRef(deviceToken), {
-      name, position: draftPosition, rating: draftRating,
-      injured, comment, preferWith: prefer, sitOut: false, votedAt
+      poolId, injured, injuryNote, sitOut: false, votedAt
     });
     showMsg("voteMsg", "Saved. Head to 'My Status' to see your placement.", false);
   }catch(e){
@@ -573,7 +622,7 @@ function renderStatus(){
       </div>
       <div class="card">
         <h2>Your entry</h2>
-        <p class="sub">Position: <strong>${posLabel(entry.position)}</strong> · Rating: <strong>${entry.rating}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
+        <p class="sub">Name: <strong>${escapeHtml(entry.name)}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
       </div>
     `;
     return;
@@ -582,22 +631,21 @@ function renderStatus(){
   el.innerHTML = `<div class="card"><h2>Rosters are live</h2><p class="sub">${cutoffLine}</p></div>` + renderPitches();
 }
 
-function posLabel(p){ return {D:"Defense", M:"Mid", A:"Attack"}[p]; }
+function avgOf(list, field){ return list.length ? Math.round(list.reduce((s,p)=>s+p[field],0)/list.length) : 0; }
 
 function renderPitches(){
   const teamA = session.players.filter(p=>p.team==="A" && !p.sitOut);
   const teamB = session.players.filter(p=>p.team==="B" && !p.sitOut);
-  function avg(list){ return list.length ? (list.reduce((s,p)=>s+p.rating,0)/list.length).toFixed(1) : "–"; }
-  function pitchHtml(team, label, cls){
+  function pitchHtml(team, label){
     const lines = {D:[], M:[], A:[]};
     team.forEach(p => lines[p.fieldPosition||p.position].push(p));
     function chip(p){
       const shiftedNote = p.fieldPosition!==p.position ? `<span class="shifted">(from ${posLabel(p.position)})</span>` : "";
-      return `<div class="chip"><span>${escapeHtml(p.name)}</span><span class="r">${p.rating}</span>${p.injured?'<span class="inj">✚</span>':''}${shiftedNote}</div>`;
+      return `<div class="chip"><span>${escapeHtml(p.name)}</span>${p.injured?'<span class="inj">✚</span>':''}${shiftedNote}</div>`;
     }
     return `
       <div class="mini-pitch">
-        <h3>${label} <span class="avg">avg ${avg(team)} · ${team.length} players</span></h3>
+        <h3>${label} <span class="avg">${team.length} players · avg rating ${avgOf(team,'rating')} · avg stamina ${avgOf(team,'stamina')}</span></h3>
         <div class="line-label">Attack</div>
         <div class="line">${lines.A.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
         <div class="line-label">Mid</div>
@@ -607,10 +655,12 @@ function renderPitches(){
       </div>
     `;
   }
-  return `<div class="pitch-wrap">${pitchHtml(teamA,"Team A","a")}${pitchHtml(teamB,"Team B","b")}</div>`;
+  return `<div class="pitch-wrap">${pitchHtml(teamA,"Team A")}${pitchHtml(teamB,"Team B")}</div>`;
 }
 
 /* ============ RENDER: ADMIN TAB ============ */
+let admVotePicker = null;
+
 function renderAdmin(){
   const el = document.getElementById("tab-admin");
   if(!adminUnlocked){
@@ -632,19 +682,37 @@ function renderAdmin(){
     return;
   }
 
+  el.innerHTML = `
+    <div class="subtabs">
+      <button class="subtab ${adminSubTab==='session'?'active':''}" data-subtab="session">Today's Session</button>
+      <button class="subtab ${adminSubTab==='pool'?'active':''}" data-subtab="pool">Player Pool</button>
+    </div>
+    <div id="admSubContent"></div>
+  `;
+  el.querySelectorAll(".subtab").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      adminSubTab = btn.dataset.subtab;
+      renderAdmin();
+    });
+  });
+
+  if(adminSubTab === "session"){ renderAdminSession(); }
+  else{ renderAdminPool(); }
+}
+
+function renderAdminSession(){
+  const el = document.getElementById("admSubContent");
   const cutoffVal = session.cutoffISO ? toLocalInputValue(session.cutoffISO) : "";
   const rows = session.players.map(p => `
     <tr>
-      <td><input type="text" data-id="${p._dbKey}" data-field="name" value="${escapeHtml(p.name)}" style="width:90px"/>${p.addedByAdmin ? '<div class="hint" style="margin-top:2px;">added by admin</div>' : ''}</td>
+      <td>${escapeHtml(p.name)}${p.addedByAdmin ? '<div class="hint" style="margin-top:2px;">added by admin</div>' : ''}</td>
+      <td>${posLabel(p.position)}</td>
+      <td>${p.rating}</td>
+      <td>${p.stamina}</td>
       <td>
-        <select data-id="${p._dbKey}" data-field="position">
-          <option value="D" ${p.position==='D'?'selected':''}>D</option>
-          <option value="M" ${p.position==='M'?'selected':''}>M</option>
-          <option value="A" ${p.position==='A'?'selected':''}>A</option>
-        </select>
+        <input type="checkbox" data-id="${p._dbKey}" data-field="injured" ${p.injured?'checked':''}/>
+        ${p.injuryNote ? `<div class="hint" style="margin-top:2px;">${escapeHtml(p.injuryNote)}</div>` : ''}
       </td>
-      <td><input type="text" inputmode="numeric" data-id="${p._dbKey}" data-field="rating" value="${p.rating}" style="width:36px"/></td>
-      <td><input type="checkbox" data-id="${p._dbKey}" data-field="injured" ${p.injured?'checked':''}/></td>
       <td><input type="checkbox" data-id="${p._dbKey}" data-field="sitOut" ${p.sitOut?'checked':''}/></td>
       <td>
         <select data-id="${p._dbKey}" data-field="teamOverride">
@@ -671,49 +739,55 @@ function renderAdmin(){
     </div>
 
     <div class="card">
-      <h2>Add a player manually</h2>
-      <p class="sub">For anyone who can't vote themselves — same fields as the normal form.</p>
-
-      <label>Name</label>
-      <input type="text" id="admAddName" placeholder="e.g. Rafi" />
-
-      <label>Position</label>
-      <div class="pos-picker" id="admAddPosPicker">
-        <div class="pos-btn ${adminAddPosition==='D'?'active':''}" data-pos="D">Defense</div>
-        <div class="pos-btn ${adminAddPosition==='M'?'active':''}" data-pos="M">Mid</div>
-        <div class="pos-btn ${adminAddPosition==='A'?'active':''}" data-pos="A">Attack</div>
+      <h2>Add a player to today's session</h2>
+      <p class="sub">For anyone who can't vote themselves — pick them from the pool.</p>
+      <label>Player</label>
+      <div class="pool-picker">
+        <input type="text" id="admVoteSearch" placeholder="Search the pool..." autocomplete="off" />
+        <div class="pool-picker-list" id="admVoteList"></div>
+        <div class="pool-picker-selected" id="admVoteSelected" style="display:none;"></div>
       </div>
-
-      <label>Rating</label>
-      <div class="rating-row">
-        <input type="range" id="admAddRating" min="1" max="10" step="1" value="${adminAddRating}" />
-        <div class="rating-badge" id="admAddRatingBadge">${adminAddRating}</div>
-      </div>
-
       <div class="checkbox-row">
-        <input type="checkbox" id="admAddInjured"/>
-        <span>Carrying an injury / niggle</span>
+        <input type="checkbox" id="admVoteInjured"/>
+        <span>Carrying an injury / niggle today</span>
       </div>
-
-      <label>Comment</label>
-      <textarea id="admAddComment" placeholder="Optional"></textarea>
-
-      <label>Prefer to play with</label>
-      <input type="text" id="admAddPrefer" placeholder="Optional" />
-
-      <button class="btn btn-primary" id="admAddSubmit">Add player</button>
-      <div id="admAddMsg"></div>
+      <label id="admVoteNoteLabel" style="display:none;">Injury note (optional)</label>
+      <textarea id="admVoteNote" placeholder="Optional" style="display:none;"></textarea>
+      <button class="btn btn-primary" id="admVoteSubmit">Add to today's session</button>
+      <div id="admVoteMsg"></div>
     </div>
 
     <div class="card" style="overflow-x:auto">
       <h2>All entries</h2>
-      <p class="sub">Edit any field to correct a false claim. Changes save immediately and teams recompute.</p>
+      <p class="sub">Name/position/rating/stamina come from the Player Pool tab. Injured, sit-out, and team lock are editable here.</p>
       <table>
-        <thead><tr><th>Name</th><th>Pos</th><th>Rtg</th><th>Inj</th><th>Sit out</th><th>Team lock</th><th>Team</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" style="color:var(--ink-soft)">No votes yet.</td></tr>'}</tbody>
+        <thead><tr><th>Name</th><th>Pos</th><th>Rtg</th><th>Stm</th><th>Inj</th><th>Sit out</th><th>Team lock</th><th>Team</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" style="color:var(--ink-soft)">No votes yet.</td></tr>'}</tbody>
       </table>
     </div>
   `;
+
+  admVotePicker = setupPoolPicker("admVote", null);
+  document.getElementById("admVoteInjured").addEventListener("change",(e)=>{
+    const show = e.target.checked;
+    document.getElementById("admVoteNoteLabel").style.display = show ? "block" : "none";
+    document.getElementById("admVoteNote").style.display = show ? "block" : "none";
+  });
+  document.getElementById("admVoteSubmit").addEventListener("click", async ()=>{
+    const poolId = admVotePicker ? admVotePicker.getSelected() : null;
+    if(!poolId){ showMsg("admVoteMsg", "Pick a player first.", true); return; }
+    const injured = document.getElementById("admVoteInjured").checked;
+    const injuryNote = document.getElementById("admVoteNote").value.trim();
+    const key = "manual_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try{
+      await set(playerRef(key), { poolId, injured, injuryNote, sitOut:false, votedAt: new Date().toISOString(), addedByAdmin: true });
+      showMsg("admVoteMsg", "Added.", false);
+      renderAdminSession();
+    }catch(e){
+      console.error(e);
+      showMsg("admVoteMsg", "Could not save — check your connection.", true);
+    }
+  });
 
   document.getElementById("admSaveCutoff").addEventListener("click", async ()=>{
     const val = document.getElementById("admCutoff").value;
@@ -734,52 +808,9 @@ function renderAdmin(){
     if(!confirm("This clears every vote for a fresh session. Continue?")) return;
     await resetSession();
   });
-
-  el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      adminAddPosition = btn.dataset.pos;
-      el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === adminAddPosition));
-    });
-  });
-  document.getElementById("admAddRating").addEventListener("input", (e)=>{
-    adminAddRating = parseInt(e.target.value, 10);
-    document.getElementById("admAddRatingBadge").textContent = adminAddRating;
-  });
-  document.getElementById("admAddSubmit").addEventListener("click", async ()=>{
-    const name = document.getElementById("admAddName").value.trim();
-    if(!name){ showMsg("admAddMsg", "Enter a name first.", true); return; }
-    const comment = document.getElementById("admAddComment").value.trim();
-    const prefer = document.getElementById("admAddPrefer").value.trim();
-    const injured = document.getElementById("admAddInjured").checked;
-    // "manual_" prefix keeps these visually distinct from real dev_ device tokens,
-    // and guarantees no collision with anyone's real vote.
-    const key = "manual_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    try{
-      await set(playerRef(key), {
-        name, position: adminAddPosition, rating: adminAddRating,
-        injured, comment, preferWith: prefer, sitOut: false,
-        votedAt: new Date().toISOString(), addedByAdmin: true
-      });
-      showMsg("admAddMsg", `Added ${name}.`, false);
-      document.getElementById("admAddName").value = "";
-      document.getElementById("admAddComment").value = "";
-      document.getElementById("admAddPrefer").value = "";
-      document.getElementById("admAddInjured").checked = false;
-      adminAddPosition = "M"; adminAddRating = 6;
-      document.getElementById("admAddRating").value = 6;
-      document.getElementById("admAddRatingBadge").textContent = 6;
-      el.querySelectorAll("#admAddPosPicker .pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === "M"));
-    }catch(e){
-      console.error(e);
-      showMsg("admAddMsg", "Could not save — check your connection.", true);
-    }
-  });
-
   el.querySelectorAll("[data-del]").forEach(btn=>{
     btn.addEventListener("click", async ()=>{
-      try{
-        await remove(playerRef(btn.dataset.del));
-      }catch(e){ console.error(e); }
+      try{ await remove(playerRef(btn.dataset.del)); }catch(e){ console.error(e); }
     });
   });
   el.querySelectorAll("[data-field]").forEach(input=>{
@@ -787,14 +818,101 @@ function renderAdmin(){
       const id = e.target.dataset.id, field = e.target.dataset.field;
       let value;
       if(field==="injured" || field==="sitOut"){ value = e.target.checked; }
-      else if(field==="rating"){ value = Math.max(1, Math.min(10, parseInt(e.target.value,10)||1)); }
       else if(field==="teamOverride"){ value = e.target.value || null; }
+      else{ return; }
+      try{ await update(playerRef(id), { [field]: value }); }catch(err){ console.error(err); }
+    });
+  });
+}
+
+function renderAdminPool(){
+  const el = document.getElementById("admSubContent");
+  const rows = pool.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p => `
+    <tr>
+      <td><input type="text" data-poolid="${p.id}" data-poolfield="name" value="${escapeHtml(p.name)}" style="width:90px"/></td>
+      <td>
+        <select data-poolid="${p.id}" data-poolfield="position">
+          <option value="D" ${p.position==='D'?'selected':''}>D</option>
+          <option value="M" ${p.position==='M'?'selected':''}>M</option>
+          <option value="A" ${p.position==='A'?'selected':''}>A</option>
+        </select>
+      </td>
+      <td><input type="number" min="1" max="100" data-poolid="${p.id}" data-poolfield="rating" value="${p.rating}" style="width:56px"/></td>
+      <td><input type="number" min="1" max="100" data-poolid="${p.id}" data-poolfield="stamina" value="${p.stamina}" style="width:56px"/></td>
+      <td class="row-actions"><button class="icon-btn danger" data-pooldel="${p.id}">✕</button></td>
+    </tr>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>Add a player to the pool</h2>
+      <p class="sub">This is the only place ratings and stamina get set — players never see or set these themselves.</p>
+
+      <label>Name</label>
+      <input type="text" id="poolAddName" placeholder="e.g. Rafi" />
+
+      <label>Rating (1–100)</label>
+      <input type="number" id="poolAddRating" min="1" max="100" value="50" />
+
+      <label>Stamina (1–100)</label>
+      <input type="number" id="poolAddStamina" min="1" max="100" value="50" />
+
+      <label>General position</label>
+      <div class="pos-picker" id="poolAddPosPicker">
+        <div class="pos-btn ${poolAddPosition==='D'?'active':''}" data-pos="D">Defense</div>
+        <div class="pos-btn ${poolAddPosition==='M'?'active':''}" data-pos="M">Mid</div>
+        <div class="pos-btn ${poolAddPosition==='A'?'active':''}" data-pos="A">Attack</div>
+      </div>
+
+      <button class="btn btn-primary" id="poolAddSubmit">Add to pool</button>
+      <div id="poolAddMsg"></div>
+    </div>
+
+    <div class="card" style="overflow-x:auto">
+      <h2>Player pool (${pool.length})</h2>
+      <p class="sub">Only visible here in Admin — players never see ratings or stamina.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Pos</th><th>Rating</th><th>Stamina</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" style="color:var(--ink-soft)">No players in the pool yet.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  el.querySelectorAll("#poolAddPosPicker .pos-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      poolAddPosition = btn.dataset.pos;
+      el.querySelectorAll("#poolAddPosPicker .pos-btn").forEach(b => b.classList.toggle("active", b.dataset.pos === poolAddPosition));
+    });
+  });
+  document.getElementById("poolAddSubmit").addEventListener("click", async ()=>{
+    const name = document.getElementById("poolAddName").value.trim();
+    if(!name){ showMsg("poolAddMsg", "Enter a name first.", true); return; }
+    const rating = clamp(parseInt(document.getElementById("poolAddRating").value,10) || 50, 1, 100);
+    const stamina = clamp(parseInt(document.getElementById("poolAddStamina").value,10) || 50, 1, 100);
+    const key = "pool_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try{
+      await set(poolPlayerRef(key), { name, rating, stamina, position: poolAddPosition });
+      showMsg("poolAddMsg", `Added ${name} to the pool.`, false);
+      renderAdminPool();
+    }catch(e){
+      console.error(e);
+      showMsg("poolAddMsg", "Could not save — check your connection.", true);
+    }
+  });
+
+  el.querySelectorAll("[data-pooldel]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      if(!confirm("Remove this player from the pool? This does not affect past votes.")) return;
+      try{ await remove(poolPlayerRef(btn.dataset.pooldel)); }catch(e){ console.error(e); }
+    });
+  });
+  el.querySelectorAll("[data-poolfield]").forEach(input=>{
+    input.addEventListener("change", async (e)=>{
+      const id = e.target.dataset.poolid, field = e.target.dataset.poolfield;
+      let value;
+      if(field==="rating" || field==="stamina"){ value = clamp(parseInt(e.target.value,10) || 1, 1, 100); }
       else{ value = e.target.value; }
-      try{
-        // Patches just this one field on this one player — never touches
-        // anyone else's entry, so it can't collide with a concurrent vote.
-        await update(playerRef(id), { [field]: value });
-      }catch(err){ console.error(err); }
+      try{ await update(poolPlayerRef(id), { [field]: value }); }catch(err){ console.error(err); }
     });
   });
 }
@@ -835,8 +953,8 @@ document.querySelectorAll(".tab").forEach(tab=>{
 });
 
 /* ============ TYPING GUARD ============ */
-// Prevents background polling from rebuilding a form while someone has a
-// field focused (this was the bug — typing got wiped every poll tick).
+// Prevents background live-sync from rebuilding a form while someone has a
+// field focused.
 let isEditingField = false;
 document.addEventListener("focusin", (e)=>{
   if(e.target.matches("input, textarea, select")) isEditingField = true;
@@ -851,27 +969,30 @@ document.addEventListener("focusout", (e)=>{
 });
 
 /* ============ INIT + LIVE SYNC ============ */
-// Firebase pushes updates the instant anyone's data changes — no polling needed.
 function renderVoteCount(){
   const el = document.getElementById("voteTally");
-  if(!el) return;
+  if(!el || !session) return;
   const n = session.players.length;
   el.textContent = n === 1 ? "1 player voted" : `${n} players voted`;
 }
+function refreshView(){
+  if(!session) return;
+  recompute(session);
+  renderVoteCount();
+  if(activeTab === "vote") return; // voting is personal, never disturb it with a live refresh
+  if(isEditingField) return;       // don't rebuild out from under an in-progress edit
+  renderActiveTab();
+}
 function init(){
   onValue(sessionRef, (snap)=>{
-    const fresh = normalizeSession(snap.exists() ? snap.val() : null);
-    recompute(fresh);
-    session = fresh;
-    renderVoteCount(); // always live, regardless of tab or in-progress typing
-    // Voting is a personal action — never disturb that tab with a live refresh.
-    if(activeTab === "vote") return;
-    // Don't rebuild out from under an in-progress edit anywhere else (e.g. admin table).
-    if(isEditingField) return;
-    renderActiveTab();
-  }, (err)=>{
-    console.error("Live sync error", err);
-  });
+    session = normalizeSession(snap.exists() ? snap.val() : null);
+    refreshView();
+  }, (err)=> console.error("Session live sync error", err));
+
+  onValue(poolRootRef, (snap)=>{
+    pool = normalizePool(snap.exists() ? snap.val() : null);
+    refreshView();
+  }, (err)=> console.error("Pool live sync error", err));
 }
 init();
 </script>
