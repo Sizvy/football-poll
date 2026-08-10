@@ -168,6 +168,13 @@
   }
   .chip .inj{ color:var(--red); }
   .chip .shifted{ font-size:10px; color:var(--ink-soft); font-style:italic; }
+  .voted-wrap{ display:flex; flex-wrap:wrap; gap:6px; }
+  .voted-chip{
+    display:inline-flex; align-items:center; gap:4px;
+    background:var(--pitch); color:#fff; border-radius:999px; padding:6px 12px;
+    font-size:13px; font-weight:600;
+  }
+  .voted-chip .inj{ color:#ffb4a3; }
 
   table{ width:100%; border-collapse:collapse; font-size:13px; }
   th,td{ padding:8px 6px; border-bottom:1px solid var(--chalk-2); text-align:left; vertical-align:middle; }
@@ -638,11 +645,25 @@ async function onWithdrawVote(){
 }
 
 /* ============ RENDER: STATUS TAB ============ */
+function renderVotedSoFar(){
+  const names = session.players.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const list = names.length
+    ? `<div class="voted-wrap">${names.map(p=>`<span class="voted-chip">${escapeHtml(p.name)}${p.injured?' <span class="inj">✚</span>':''}</span>`).join("")}</div>`
+    : `<p class="hint">No one has voted yet.</p>`;
+  return `
+    <div class="card">
+      <h2>Who's voted so far (${names.length})</h2>
+      <p class="sub">Teams stay hidden until reveal — this is just who's in.</p>
+      ${list}
+    </div>
+  `;
+}
+
 function renderStatus(){
   const el = document.getElementById("tab-status");
   const entry = myEntry();
   if(!entry){
-    el.innerHTML = `<div class="card"><h2>No vote yet</h2><p class="sub">Head to the Vote tab to submit your entry from this device.</p></div>`;
+    el.innerHTML = `<div class="card"><h2>No vote yet</h2><p class="sub">Head to the Vote tab to submit your entry from this device.</p></div>` + renderVotedSoFar();
     return;
   }
   const revealed = isRevealed(session);
@@ -664,7 +685,7 @@ function renderStatus(){
         <h2>Your entry</h2>
         <p class="sub">Name: <strong>${escapeHtml(entry.name)}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
       </div>
-    `;
+    ` + renderVotedSoFar();
     return;
   }
 
