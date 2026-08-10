@@ -340,8 +340,6 @@ async function resetSession(){
 /* ============ BALANCING ALGORITHM ============ */
 const POS_ORDER = ["D","M","A"];
 
-function cloneState(s){ return JSON.parse(JSON.stringify(s)); }
-
 // Joins each vote with its pool record (name/rating/stamina/position), then
 // runs team assignment + on-field position balancing. session.players ends
 // up holding the merged, computed objects the rest of the app renders.
@@ -365,75 +363,69 @@ function recompute(s){
   return s;
 }
 
-// Priority order (each tier only matters once the tier above it is tied):
-// 1. headcount   2. position lines   3. stamina   4. rating
-const W_COUNT = 1e9, W_POS = 1e5, W_STAMINA = 1e2, W_RATING = 1;
-
+// Pairing strategy: within each position line, sort players closest-to-closest
+// by rating (then stamina as the tiebreak), pair adjacent players, and split
+// each pair one-to-each-team — the better of the pair goes to whichever team
+// is currently behind, so two closely-matched players are never on the same
+// side. A perfectly tied pair is split by coin flip instead of by rating.
+// A leftover (odd one out in a line) goes to whichever team is behind on
+// headcount first, so team sizes stay as even as pairing alone can't guarantee.
 function computeTeams(players){
   const eligible = players.filter(p => !p.sitOut);
   const overridden = eligible.filter(p => p.teamOverride);
-  const rest = eligible.filter(p => !p.teamOverride)
-    .slice()
-    .sort((a,b) => (b.rating - a.rating) || (b.stamina - a.stamina) || a.id.localeCompare(b.id));
+  const pairable = eligible.filter(p => !p.teamOverride);
 
   const state = {
-    A:{count:0, stamina:0, rating:0, pos:{D:0,M:0,A:0}},
-    B:{count:0, stamina:0, rating:0, pos:{D:0,M:0,A:0}}
+    A:{count:0, rating:0, stamina:0},
+    B:{count:0, rating:0, stamina:0}
   };
   const assign = {};
 
   overridden.forEach(p=>{
     assign[p.id] = p.teamOverride;
     const s = state[p.teamOverride];
-    s.count++; s.stamina += p.stamina; s.rating += p.rating; s.pos[p.position]++;
+    s.count++; s.rating += p.rating; s.stamina += p.stamina;
   });
 
-  function imbalance(sA, sB){
-    return Math.abs(sA.count - sB.count) * W_COUNT
-      + Math.abs(sA.stamina - sB.stamina) * W_STAMINA
-      + (Math.abs(sA.pos.D-sB.pos.D)+Math.abs(sA.pos.M-sB.pos.M)+Math.abs(sA.pos.A-sB.pos.A)) * W_POS
-      + Math.abs(sA.rating - sB.rating) * W_RATING;
-  }
-
-  rest.forEach(p=>{
-    const A2 = cloneState(state.A); A2.count++; A2.stamina+=p.stamina; A2.rating+=p.rating; A2.pos[p.position]++;
-    const B2 = cloneState(state.B); B2.count++; B2.stamina+=p.stamina; B2.rating+=p.rating; B2.pos[p.position]++;
-    const scoreA = imbalance(A2, state.B);
-    const scoreB = imbalance(state.A, B2);
-    const team = scoreA <= scoreB ? "A" : "B";
+  function assignPlayer(p, team){
     assign[p.id] = team;
     const s = state[team];
-    s.count++; s.stamina += p.stamina; s.rating += p.rating; s.pos[p.position]++;
-  });
-
-  function applyMove(p, from, to){
-    state[from].count--; state[from].stamina -= p.stamina; state[from].rating -= p.rating; state[from].pos[p.position]--;
-    state[to].count++; state[to].stamina += p.stamina; state[to].rating += p.rating; state[to].pos[p.position]++;
-    assign[p.id] = to;
+    s.count++; s.rating += p.rating; s.stamina += p.stamina;
   }
-  function swapPlayers(p1, p2){
-    const t1 = assign[p1.id], t2 = assign[p2.id];
-    applyMove(p1, t1, t2);
-    applyMove(p2, t2, t1);
+  // Used when placing the better half of a pair: rating first, stamina second.
+  function weakerTeamByStrength(){
+    if(state.A.rating !== state.B.rating) return state.A.rating < state.B.rating ? "A" : "B";
+    if(state.A.stamina !== state.B.stamina) return state.A.stamina < state.B.stamina ? "A" : "B";
+    return Math.random() < 0.5 ? "A" : "B";
   }
-  function totalImbalance(){ return imbalance(state.A, state.B); }
+  // Used for lone leftovers: headcount first, so pairing alone doesn't let
+  // team sizes drift when a position line has an odd number of players.
+  function weakerTeamByCount(){
+    if(state.A.count !== state.B.count) return state.A.count < state.B.count ? "A" : "B";
+    return weakerTeamByStrength();
+  }
 
-  let improved = true, iter = 0;
-  const movable = eligible.filter(p=>!p.teamOverride);
-  while(improved && iter < 200){
-    improved = false; iter++;
-    for(const p1 of movable){
-      for(const p2 of movable){
-        if(p1.id===p2.id) continue;
-        if(assign[p1.id] === assign[p2.id]) continue;
-        const before = totalImbalance();
-        swapPlayers(p1,p2);
-        const after = totalImbalance();
-        if(after < before){ improved = true; }
-        else{ swapPlayers(p1,p2); }
-      }
+  const byPos = { D: [], M: [], A: [] };
+  pairable.forEach(p => byPos[p.position].push(p));
+
+  POS_ORDER.forEach(line=>{
+    const group = byPos[line].sort((a,b)=> b.rating - a.rating || b.stamina - a.stamina || a.id.localeCompare(b.id));
+    let i = 0;
+    for(; i+1 < group.length; i += 2){
+      const p1 = group[i], p2 = group[i+1]; // adjacent in sorted order = closest match
+      const exactTie = p1.rating === p2.rating && p1.stamina === p2.stamina;
+      let better = p1, worse = p2; // group is sorted desc, so p1 is better-or-equal by construction
+      if(exactTie && Math.random() < 0.5){ better = p2; worse = p1; } // identical -> randomize who's "first"
+
+      const strongTeam = weakerTeamByStrength();
+      const weakTeam = strongTeam === "A" ? "B" : "A";
+      assignPlayer(better, strongTeam); // "better goes to the team that's currently behind"
+      assignPlayer(worse, weakTeam);
     }
-  }
+    if(i < group.length){
+      assignPlayer(group[i], weakerTeamByCount()); // odd one out in this line
+    }
+  });
 
   eligible.forEach(p => p.team = assign[p.id]);
   players.filter(p=>p.sitOut).forEach(p => p.team = null);
