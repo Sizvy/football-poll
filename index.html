@@ -366,8 +366,8 @@ function recompute(s){
 }
 
 // Priority order (each tier only matters once the tier above it is tied):
-// 1. headcount   2. stamina   3. position lines   4. rating
-const W_COUNT = 1e9, W_STAMINA = 1e5, W_POS = 1e2, W_RATING = 1;
+// 1. headcount   2. position lines   3. stamina   4. rating
+const W_COUNT = 1e9, W_POS = 1e5, W_STAMINA = 1e2, W_RATING = 1;
 
 function computeTeams(players){
   const eligible = players.filter(p => !p.sitOut);
