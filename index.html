@@ -368,8 +368,12 @@ function recompute(s){
 // each pair one-to-each-team — the better of the pair goes to whichever team
 // is currently behind, so two closely-matched players are never on the same
 // side. A perfectly tied pair is split by coin flip instead of by rating.
-// A leftover (odd one out in a line) goes to whichever team is behind on
-// headcount first, so team sizes stay as even as pairing alone can't guarantee.
+// Any line with an odd headcount leaves one leftover unpaired; those leftovers
+// are pooled across all three lines and paired against EACH OTHER the same
+// way, rather than being dropped onto whichever team is short a body — that
+// let a single high-stat leftover reinforce an existing imbalance instead of
+// correcting it. Only a genuinely lone leftover (odd total player count)
+// falls back to plain headcount.
 function computeTeams(players){
   const eligible = players.filter(p => !p.sitOut);
   const overridden = eligible.filter(p => p.teamOverride);
@@ -398,34 +402,43 @@ function computeTeams(players){
     if(state.A.stamina !== state.B.stamina) return state.A.stamina < state.B.stamina ? "A" : "B";
     return Math.random() < 0.5 ? "A" : "B";
   }
-  // Used for lone leftovers: headcount first, so pairing alone doesn't let
-  // team sizes drift when a position line has an odd number of players.
+  // Used only for a single truly-unpaired leftover: headcount first.
   function weakerTeamByCount(){
     if(state.A.count !== state.B.count) return state.A.count < state.B.count ? "A" : "B";
     return weakerTeamByStrength();
   }
-
-  const byPos = { D: [], M: [], A: [] };
-  pairable.forEach(p => byPos[p.position].push(p));
-
-  POS_ORDER.forEach(line=>{
-    const group = byPos[line].sort((a,b)=> b.rating - a.rating || b.stamina - a.stamina || a.id.localeCompare(b.id));
+  // Pairs adjacent entries in an already-sorted list and splits each pair
+  // across teams. Returns the one unpaired leftover if the list is odd-length.
+  function pairAndSplit(sortedGroup){
     let i = 0;
-    for(; i+1 < group.length; i += 2){
-      const p1 = group[i], p2 = group[i+1]; // adjacent in sorted order = closest match
+    for(; i+1 < sortedGroup.length; i += 2){
+      const p1 = sortedGroup[i], p2 = sortedGroup[i+1]; // adjacent in sorted order = closest match
       const exactTie = p1.rating === p2.rating && p1.stamina === p2.stamina;
-      let better = p1, worse = p2; // group is sorted desc, so p1 is better-or-equal by construction
+      let better = p1, worse = p2; // sorted desc, so p1 is better-or-equal by construction
       if(exactTie && Math.random() < 0.5){ better = p2; worse = p1; } // identical -> randomize who's "first"
-
       const strongTeam = weakerTeamByStrength();
       const weakTeam = strongTeam === "A" ? "B" : "A";
       assignPlayer(better, strongTeam); // "better goes to the team that's currently behind"
       assignPlayer(worse, weakTeam);
     }
-    if(i < group.length){
-      assignPlayer(group[i], weakerTeamByCount()); // odd one out in this line
-    }
+    return i < sortedGroup.length ? sortedGroup[i] : null;
+  }
+
+  const byPos = { D: [], M: [], A: [] };
+  pairable.forEach(p => byPos[p.position].push(p));
+
+  const leftovers = [];
+  POS_ORDER.forEach(line=>{
+    const group = byPos[line].sort((a,b)=> b.rating - a.rating || b.stamina - a.stamina || a.id.localeCompare(b.id));
+    const leftover = pairAndSplit(group);
+    if(leftover) leftovers.push(leftover);
   });
+
+  leftovers.sort((a,b)=> b.rating - a.rating || b.stamina - a.stamina || a.id.localeCompare(b.id));
+  const finalLeftover = pairAndSplit(leftovers);
+  if(finalLeftover){
+    assignPlayer(finalLeftover, weakerTeamByCount());
+  }
 
   eligible.forEach(p => p.team = assign[p.id]);
   players.filter(p=>p.sitOut).forEach(p => p.team = null);
