@@ -667,10 +667,6 @@ function renderVotedSoFar(){
 function renderStatus(){
   const el = document.getElementById("tab-status");
   const entry = myEntry();
-  if(!entry){
-    el.innerHTML = `<div class="card"><h2>No vote yet</h2><p class="sub">Head to the Vote tab to submit your entry from this device.</p></div>` + renderVotedSoFar();
-    return;
-  }
   const revealed = isRevealed(session);
   let cutoffLine = "The coordinator hasn't set a reveal time yet.";
   if(session.cutoffISO){
@@ -678,23 +674,28 @@ function renderStatus(){
     cutoffLine = revealed ? "Rosters are live." : `Rosters reveal at ${d.toLocaleString()}.`;
   }
 
-  if(!revealed){
-    el.innerHTML = `
-      <div class="ticket">
-        <div class="lock">🔒</div>
-        <div class="note">You're placed. Your team-mates stay hidden until reveal.</div>
-        <div class="team-stamp ${entry.team==='A'?'a':'b'}">Team ${entry.team || '—'}</div>
-        <div class="countdown">${cutoffLine}</div>
-      </div>
-      <div class="card">
-        <h2>Your entry</h2>
-        <p class="sub">Name: <strong>${escapeHtml(entry.name)}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
-      </div>
-    ` + renderVotedSoFar();
+  if(revealed){
+    el.innerHTML = `<div class="card"><h2>Rosters are live</h2><p class="sub">${cutoffLine}</p></div>` + renderPitches();
     return;
   }
 
-  el.innerHTML = `<div class="card"><h2>Rosters are live</h2><p class="sub">${cutoffLine}</p></div>` + renderPitches();
+  if(!entry){
+    el.innerHTML = `<div class="card"><h2>No vote yet</h2><p class="sub">Head to the Vote tab to submit your entry from this device.</p></div>` + renderVotedSoFar();
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="ticket">
+      <div class="lock">🔒</div>
+      <div class="note">You're placed. Your team-mates stay hidden until reveal.</div>
+      <div class="team-stamp ${entry.team==='A'?'a':'b'}">Team ${entry.team || '—'}</div>
+      <div class="countdown">${cutoffLine}</div>
+    </div>
+    <div class="card">
+      <h2>Your entry</h2>
+      <p class="sub">Name: <strong>${escapeHtml(entry.name)}</strong>${entry.injured ? ' · <span style="color:var(--red)">Injury flagged</span>' : ''}</p>
+    </div>
+  ` + renderVotedSoFar();
 }
 
 function avgOf(list, field){ return list.length ? Math.round(list.reduce((s,p)=>s+p[field],0)/list.length) : 0; }
