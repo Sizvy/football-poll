@@ -267,6 +267,7 @@ const fbApp = initializeApp(firebaseConfig);
 const db = getDatabase(fbApp);
 const sessionRef = ref(db, "sessions/current");
 const poolRootRef = ref(db, "pool/players");
+const tournamentRef = ref(db, "tournament/current");
 
 async function sha256Hex(str){
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -275,12 +276,13 @@ async function sha256Hex(str){
 function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
 /* ============ STATE ============ */
-let session = null;
+let session = emptySession();
 let pool = []; // array of {id, name, rating, stamina, position}
+let tournament = emptyTournament();
 let deviceToken = getDeviceToken();
 let adminUnlocked = false;
 let activeTab = "vote";
-let adminSubTab = "session"; // "session" | "pool"
+let adminSubTab = "session"; // "session" | "pool" | "tournament"
 let poolAddPosition = "D";
 
 function getDeviceToken(){
@@ -290,10 +292,15 @@ function getDeviceToken(){
 }
 function playerRef(token){ return ref(db, "sessions/current/players/" + token); }
 function poolPlayerRef(id){ return ref(db, "pool/players/" + id); }
+function tournamentEntryRef(poolId){ return ref(db, "tournament/current/entries/" + poolId); }
 const metaRef = ref(db, "sessions/current/meta");
+const tournamentMetaRef = ref(db, "tournament/current/meta");
 
 function emptySession(){
   return { createdAt: new Date().toISOString(), cutoffISO: null, revealNow: false, players: [] };
+}
+function emptyTournament(){
+  return { createdAt: new Date().toISOString(), numTeams: 4, entries: [] };
 }
 
 // Each vote is stored as {poolId, injured, injuryNote, sitOut, teamOverride, votedAt}
@@ -313,6 +320,20 @@ function normalizeSession(raw){
 function normalizePool(raw){
   const obj = raw || {};
   return Object.keys(obj).map(key => ({ id: key, name: "", rating: 50, stamina: 50, position: "M", ...obj[key] }));
+}
+// Tournament entries are keyed directly by poolId (not a device token or random
+// id) — since only the admin ever writes here, this doubles as automatic
+// duplicate prevention: adding the same pool player twice just re-writes the
+// same key.
+function normalizeTournament(raw){
+  const meta = (raw && raw.meta) || {};
+  const entriesObj = (raw && raw.entries) || {};
+  const entries = Object.keys(entriesObj).map(key => ({ id: key, poolId: key, ...entriesObj[key] }));
+  return {
+    createdAt: meta.createdAt || new Date().toISOString(),
+    numTeams: clamp(parseInt(meta.numTeams,10) || 4, 2, 12),
+    entries
+  };
 }
 
 /* ============ STORAGE I/O (Firebase Realtime Database) ============ */
@@ -480,6 +501,82 @@ function computeFieldPositions(teamPlayers){
     if(!moved) break;
   }
   return teamPlayers;
+}
+
+// N-team generalization of the same priority order (position -> rating ->
+// stamina) used for the regular 2-team split. There's no natural "pair and
+// split" with more than two teams, so instead: within each position line,
+// sorted closest-first by rating/stamina, each player goes one at a time to
+// whichever team currently has the FEWEST players — ties broken by lowest
+// rating, then lowest stamina, then randomly. Headcount is checked first here
+// (unlike the 2-team version, where pairing keeps headcount even as a side
+// effect automatically) since there's no pairing mechanism to lean on with
+// more than two recipient teams.
+function computeTournamentTeams(entries, numTeams){
+  const eligible = entries.filter(e => !e.sitOut);
+  const overridden = eligible.filter(e => e.teamOverride);
+  const pairable = eligible.filter(e => !e.teamOverride);
+
+  const teams = Array.from({length: numTeams}, () => ({count:0, rating:0, stamina:0}));
+  const assign = {};
+
+  overridden.forEach(e=>{
+    const idx = clamp(parseInt(e.teamOverride,10) || 1, 1, numTeams) - 1;
+    assign[e.id] = idx + 1;
+    const t = teams[idx];
+    t.count++; t.rating += e.rating; t.stamina += e.stamina;
+  });
+
+  function weakestTeamIndex(){
+    let candidates = teams.map((t,i)=>i);
+    const minCount = Math.min(...candidates.map(i=>teams[i].count));
+    candidates = candidates.filter(i=>teams[i].count===minCount);
+    if(candidates.length>1){
+      const minRating = Math.min(...candidates.map(i=>teams[i].rating));
+      candidates = candidates.filter(i=>teams[i].rating===minRating);
+    }
+    if(candidates.length>1){
+      const minStamina = Math.min(...candidates.map(i=>teams[i].stamina));
+      candidates = candidates.filter(i=>teams[i].stamina===minStamina);
+    }
+    return candidates[Math.floor(Math.random()*candidates.length)];
+  }
+
+  const byPos = { D: [], M: [], A: [] };
+  pairable.forEach(e => byPos[e.position].push(e));
+
+  POS_ORDER.forEach(line=>{
+    const group = byPos[line].sort((a,b)=> b.rating - a.rating || b.stamina - a.stamina || a.id.localeCompare(b.id));
+    group.forEach(e=>{
+      const idx = weakestTeamIndex();
+      assign[e.id] = idx + 1;
+      const t = teams[idx];
+      t.count++; t.rating += e.rating; t.stamina += e.stamina;
+    });
+  });
+
+  eligible.forEach(e => e.team = assign[e.id]);
+  entries.filter(e=>e.sitOut).forEach(e => e.team = null);
+  return entries;
+}
+
+function recomputeTournament(t){
+  const joined = t.entries.map(e=>{
+    const p = pool.find(pp => pp.id === e.poolId);
+    return {
+      ...e,
+      name: p ? p.name : "(unknown player)",
+      rating: p && typeof p.rating === "number" ? p.rating : 50,
+      stamina: p && typeof p.stamina === "number" ? p.stamina : 50,
+      position: p && p.position ? p.position : "M"
+    };
+  });
+  computeTournamentTeams(joined, t.numTeams);
+  for(let i=1; i<=t.numTeams; i++){
+    computeFieldPositions(joined.filter(e => e.team===i && !e.sitOut));
+  }
+  t.entries = joined;
+  return t;
 }
 
 /* ============ REVEAL LOGIC ============ */
@@ -725,6 +822,35 @@ function renderPitches(){
   return `<div class="pitch-wrap">${pitchHtml(teamA,"Team A")}${pitchHtml(teamB,"Team B")}</div>`;
 }
 
+function renderTournamentPitches(t){
+  function pitchHtml(team, label){
+    const lines = {D:[], M:[], A:[]};
+    team.forEach(p => lines[p.fieldPosition||p.position].push(p));
+    function chip(p){
+      const shiftedNote = p.fieldPosition!==p.position ? `<span class="shifted">(from ${posLabel(p.position)})</span>` : "";
+      return `<div class="chip"><span>${escapeHtml(p.name)}</span>${shiftedNote}</div>`;
+    }
+    return `
+      <div class="mini-pitch">
+        <h3>${label} <span class="avg">${team.length} players · avg rating ${avgOf(team,'rating')} · avg stamina ${avgOf(team,'stamina')}</span></h3>
+        <div class="line-label">Attack</div>
+        <div class="line">${lines.A.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+        <div class="line-label">Mid</div>
+        <div class="line">${lines.M.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+        <div class="line-label">Defense</div>
+        <div class="line">${lines.D.map(chip).join("") || '<span style="color:rgba(245,241,230,.5);font-size:12px;">—</span>'}</div>
+      </div>
+    `;
+  }
+  let html = '<div class="pitch-wrap">';
+  for(let i=1; i<=t.numTeams; i++){
+    const team = t.entries.filter(e => e.team===i && !e.sitOut);
+    html += pitchHtml(team, `Team ${i}`);
+  }
+  html += '</div>';
+  return html;
+}
+
 /* ============ RENDER: ADMIN TAB ============ */
 let admVotePicker = null;
 
@@ -753,6 +879,7 @@ function renderAdmin(){
     <div class="subtabs">
       <button class="subtab ${adminSubTab==='session'?'active':''}" data-subtab="session">Today's Session</button>
       <button class="subtab ${adminSubTab==='pool'?'active':''}" data-subtab="pool">Player Pool</button>
+      <button class="subtab ${adminSubTab==='tournament'?'active':''}" data-subtab="tournament">Tournament</button>
     </div>
     <div id="admSubContent"></div>
   `;
@@ -764,7 +891,8 @@ function renderAdmin(){
   });
 
   if(adminSubTab === "session"){ renderAdminSession(); }
-  else{ renderAdminPool(); }
+  else if(adminSubTab === "pool"){ renderAdminPool(); }
+  else{ renderAdminTournament(); }
 }
 
 function renderAdminSession(){
@@ -998,6 +1126,117 @@ function renderAdminPool(){
   });
 }
 
+let tournamentPicker = null;
+
+function renderAdminTournament(){
+  const el = document.getElementById("admSubContent");
+  const rows = tournament.entries.map(e => `
+    <tr>
+      <td>${escapeHtml(e.name)}</td>
+      <td>${posLabel(e.position)}</td>
+      <td>${e.rating}</td>
+      <td>${e.stamina}</td>
+      <td><input type="checkbox" data-tid="${e.id}" data-tfield="sitOut" ${e.sitOut?'checked':''}/></td>
+      <td>
+        <select data-tid="${e.id}" data-tfield="teamOverride">
+          <option value="" ${!e.teamOverride?'selected':''}>Auto</option>
+          ${Array.from({length: tournament.numTeams}, (_,i)=>i+1).map(n=>`<option value="${n}" ${String(e.teamOverride)===String(n)?'selected':''}>Force Team ${n}</option>`).join("")}
+        </select>
+      </td>
+      <td>${e.team ? `<span class="team-tag a">Team ${e.team}</span>` : '—'}</td>
+      <td class="row-actions"><button class="icon-btn danger" data-tdel="${e.id}">✕</button></td>
+    </tr>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>Tournament setup</h2>
+      <p class="sub">Fully admin-only — no one votes here, you build the rosters directly from the pool.</p>
+      <label>Number of teams</label>
+      <input type="number" id="tourNumTeams" min="2" max="12" value="${tournament.numTeams}" />
+      <button class="btn btn-outline" id="tourSaveTeams">Save number of teams</button>
+      <button class="btn btn-danger" id="tourReset">Start new tournament (clears all entries)</button>
+      <div id="tourMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Add a player to the tournament</h2>
+      <label>Player</label>
+      <div class="pool-picker">
+        <input type="text" id="tourAddSearch" placeholder="Search the pool..." autocomplete="off" />
+        <div class="pool-picker-list" id="tourAddList"></div>
+        <div class="pool-picker-selected" id="tourAddSelected" style="display:none;"></div>
+      </div>
+      <button class="btn btn-primary" id="tourAddSubmit">Add to tournament</button>
+      <div id="tourAddMsg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Tournament team formation</h2>
+      <p class="sub">${tournament.entries.length} players across ${tournament.numTeams} teams — same balancing logic as matchday, generalized beyond two sides.</p>
+    </div>
+    ${renderTournamentPitches(tournament)}
+
+    <div class="card" style="overflow-x:auto">
+      <h2>All tournament entries</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Pos</th><th>Rtg</th><th>Stm</th><th>Sit out</th><th>Team lock</th><th>Team</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="color:var(--ink-soft)">No players added yet.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  tournamentPicker = setupPoolPicker("tourAdd", null);
+
+  document.getElementById("tourSaveTeams").addEventListener("click", async ()=>{
+    const n = clamp(parseInt(document.getElementById("tourNumTeams").value,10) || 2, 2, 12);
+    try{
+      await update(tournamentMetaRef, { numTeams: n });
+      showMsg("tourMsg", "Saved.", false);
+    }catch(e){
+      console.error(e);
+      showMsg("tourMsg", "Could not save — check your connection.", true);
+    }
+  });
+  document.getElementById("tourReset").addEventListener("click", async ()=>{
+    if(!confirm("This clears every tournament entry. Continue?")) return;
+    try{
+      await set(tournamentRef, { meta: { createdAt: new Date().toISOString(), numTeams: tournament.numTeams } });
+    }catch(e){ console.error(e); }
+  });
+  document.getElementById("tourAddSubmit").addEventListener("click", async ()=>{
+    const poolId = tournamentPicker ? tournamentPicker.getSelected() : null;
+    if(!poolId){ showMsg("tourAddMsg", "Pick a player first.", true); return; }
+    if(tournament.entries.some(e=>e.poolId===poolId)){
+      showMsg("tourAddMsg", "Already in the tournament.", true);
+      return;
+    }
+    try{
+      await set(tournamentEntryRef(poolId), { sitOut: false });
+      showMsg("tourAddMsg", "Added.", false);
+      renderAdminTournament();
+    }catch(e){
+      console.error(e);
+      showMsg("tourAddMsg", "Could not save — check your connection.", true);
+    }
+  });
+  el.querySelectorAll("[data-tdel]").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      try{ await remove(tournamentEntryRef(btn.dataset.tdel)); }catch(e){ console.error(e); }
+    });
+  });
+  el.querySelectorAll("[data-tfield]").forEach(input=>{
+    input.addEventListener("change", async (e)=>{
+      const id = e.target.dataset.tid, field = e.target.dataset.tfield;
+      let value;
+      if(field==="sitOut"){ value = e.target.checked; }
+      else if(field==="teamOverride"){ value = e.target.value ? parseInt(e.target.value,10) : null; }
+      else{ return; }
+      try{ await update(tournamentEntryRef(id), { [field]: value }); }catch(err){ console.error(err); }
+    });
+  });
+}
+
 function toLocalInputValue(iso){
   const d = new Date(iso);
   const pad = n => String(n).padStart(2,"0");
@@ -1064,6 +1303,13 @@ function refreshView(){
   if(isEditingField) return;       // don't rebuild out from under an in-progress edit
   renderActiveTab();
 }
+function refreshTournamentView(){
+  if(!tournament) return;
+  recomputeTournament(tournament);
+  if(activeTab !== "admin" || adminSubTab !== "tournament") return;
+  if(isEditingField) return;
+  renderAdmin();
+}
 function init(){
   onValue(sessionRef, (snap)=>{
     session = normalizeSession(snap.exists() ? snap.val() : null);
@@ -1073,7 +1319,13 @@ function init(){
   onValue(poolRootRef, (snap)=>{
     pool = normalizePool(snap.exists() ? snap.val() : null);
     refreshView();
+    refreshTournamentView();
   }, (err)=> console.error("Pool live sync error", err));
+
+  onValue(tournamentRef, (snap)=>{
+    tournament = normalizeTournament(snap.exists() ? snap.val() : null);
+    refreshTournamentView();
+  }, (err)=> console.error("Tournament live sync error", err));
 }
 init();
 </script>
